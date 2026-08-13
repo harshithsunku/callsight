@@ -82,6 +82,16 @@ CFLAGS_RELEASE = -std=c11 -O2 -fno-omit-frame-pointer $(WARNINGS) $(DEFINES) $(I
 # Symbols: optimized with debug info (best for perf)
 CFLAGS_SYMBOLS = -std=c11 -O2 -g3 -fno-omit-frame-pointer $(WARNINGS) $(DEFINES) $(INCLUDES)
 
+# Instrument: symbols build + compile-time function entry/exit hooks
+# (-finstrument-functions). Every source gets the hooks except the
+# instrumentation runtime itself (src/instrument/), which has its own rule
+# below. -no-pie keeps runtime addresses equal to link addresses so the
+# offline analyzer can resolve symbols directly with addr2line.
+CFLAGS_INSTRUMENT = $(CFLAGS_SYMBOLS) -finstrument-functions \
+    -finstrument-functions-exclude-file-list=instrument
+LDFLAGS_INSTRUMENT = -no-pie
+TRACE_OBJ = $(BUILDDIR)/instrument/trace.o
+
 # Default to debug
 CFLAGS ?= $(CFLAGS_DEBUG)
 
@@ -89,7 +99,7 @@ CFLAGS ?= $(CFLAGS_DEBUG)
 MAPFLAG = -Wl,-Map=$(BINDIR)/$(TARGET).map
 
 # --- Targets ---
-.PHONY: all debug release symbols strip all-variants clean all-cross
+.PHONY: all debug release symbols strip all-variants clean all-cross instrument
 
 all: debug
 
@@ -109,6 +119,13 @@ strip: symbols
 	$(STRIP) -o $(BINDIR)/$(TARGET).stripped $(BINDIR)/$(TARGET).sym
 	@echo "Built: $(BINDIR)/$(TARGET).stripped"
 
+# Instrumented build: run `make clean` first if another profile was built
+# (objects in $(BUILDDIR) are profile-specific).
+instrument: CFLAGS = $(CFLAGS_INSTRUMENT)
+instrument: $(BINDIR)/$(TARGET).instr
+	@echo "Built: $< (instrument)"
+	@echo "Run with: MATRIXLAB_TRACE=1 $<"
+
 all-variants: debug release symbols strip disasm
 	@echo "=== All variants built ==="
 	@ls -la $(BINDIR)/$(TARGET).*
@@ -126,6 +143,15 @@ $(BINDIR)/$(TARGET).release: $(OBJS) | $(BINDIR)
 
 $(BINDIR)/$(TARGET).sym: $(OBJS) | $(BINDIR)
 	$(CC) $(CFLAGS_SYMBOLS) -o $@ $(OBJS) $(LDFLAGS) $(MAPFLAG)
+
+$(BINDIR)/$(TARGET).instr: $(OBJS) $(TRACE_OBJ) | $(BINDIR)
+	$(CC) $(CFLAGS_INSTRUMENT) $(LDFLAGS_INSTRUMENT) -o $@ $(OBJS) $(TRACE_OBJ) $(LDFLAGS) $(MAPFLAG)
+
+# Instrumentation runtime: compiled WITHOUT -finstrument-functions so the
+# hooks cannot recurse into themselves.
+$(TRACE_OBJ): $(SRCDIR)/instrument/trace.c $(SRCDIR)/instrument/trace.h | $(BUILDDIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS_SYMBOLS) -c -o $@ $<
 
 # --- Compile rule ---
 $(BUILDDIR)/%.o: $(SRCDIR)/%.c | $(BUILDDIR)
