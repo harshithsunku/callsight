@@ -1,0 +1,11 @@
+# Build artifacts
+build/
+bin/
+
+# Instrumentation trace output
+traces/
+
+# Editor/OS noise
+*.swp
+*~
+.DS_Store
