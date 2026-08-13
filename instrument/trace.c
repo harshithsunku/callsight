@@ -1,17 +1,18 @@
 /*
- * Compile-time function instrumentation runtime.
+ * Portable compile-time function instrumentation runtime.
  *
- * This file is linked into the `instrument` build profile. Every other
- * translation unit is compiled with -finstrument-functions, so each function
- * entry/exit calls the __cyg_profile_* hooks below. This file itself is
- * compiled WITHOUT the flag (see Makefile) and every function here carries
+ * The host project's sources are compiled with -finstrument-functions, so
+ * each function entry/exit calls the __cyg_profile_* hooks below. This file
+ * is compiled WITHOUT the flag and every function here carries
  * no_instrument_function, so hook code can never trigger itself.
  *
  * Design notes:
  *  - All state is per-thread (TLS); there are no locks in the hot path.
- *  - Events are raw addresses + timestamps; symbol resolution happens offline
- *    (tools/trace_analyze.py + addr2line), keeping hook cost minimal.
- *  - Hooks stay inert (one predictable branch) unless MATRIXLAB_TRACE=1.
+ *  - Events are raw addresses + timestamps; symbol resolution happens
+ *    offline (trace_analyze.py + addr2line), keeping hook cost minimal.
+ *  - Hooks stay inert (one predictable branch) unless TRACE_ENABLE=1.
+ *  - No project dependencies: this file is meant to be dropped into any
+ *    C/C++ codebase as-is.
  */
 
 #include "trace.h"
@@ -91,18 +92,17 @@ NOINSTR static void trace_atexit(void) {
 /* --- One-time global init --- */
 
 NOINSTR static void trace_global_init(void) {
-    const char *env = getenv("MATRIXLAB_TRACE");
+    const char *env = getenv("TRACE_ENABLE");
     g_trace_enabled = (env && env[0] == '1');
 
-    env = getenv("MATRIXLAB_TRACE_DIR");
+    env = getenv("TRACE_DIR");
     if (env && env[0] != '\0') {
         snprintf(g_trace_dir, sizeof(g_trace_dir), "%s", env);
     }
 
-    env = getenv("MATRIXLAB_TRACE_MAX");
+    env = getenv("TRACE_MAX");
     if (env) {
-        uint64_t v = strtoull(env, NULL, 10);
-        g_trace_max = v;
+        g_trace_max = strtoull(env, NULL, 10);
     }
 
     if (!g_trace_enabled) return;

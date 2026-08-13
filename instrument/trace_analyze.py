@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-Offline analyzer for MatrixLab compile-time traces.
+Offline analyzer for compile-time traces produced by the instrument toolkit.
 
-Reads the binary trace files produced by an `instrument` build
-(src/instrument/trace.c), resolves function addresses with addr2line
-(static functions included), matches enter/exit events per thread, and
-reports per-function call counts and inclusive/self times.
+Reads the binary trace files written by trace.c, resolves function addresses
+with addr2line (static functions included), matches enter/exit events per
+thread, and reports per-function call counts and inclusive/self times.
 
 Usage:
-    python3 tools/trace_analyze.py [traces/] [--exe bin/matrixlab.instr] [--top 20]
+    python3 trace_analyze.py [traces/] [--exe path/to/binary] [--top 20]
 
-The instrument build links with -no-pie, so recorded runtime addresses can be
-fed to addr2line directly.
+If --exe is omitted, a single `*.instr` binary is looked up under ./bin and .
+Build instrumented binaries with -no-pie (the toolkit Makefile snippet does
+this) so recorded runtime addresses can be fed to addr2line directly.
 """
 
 import argparse
@@ -110,15 +110,28 @@ def fmt_ms(ns):
     return f"{ns / 1e6:12.3f}"
 
 
+def find_exe(arg):
+    if arg:
+        return arg
+    candidates = list(Path("bin").glob("*.instr")) + list(Path(".").glob("*.instr"))
+    if len(candidates) == 1:
+        return str(candidates[0])
+    sys.exit("--exe not given and "
+             + ("no *.instr binary found under ./bin or ." if not candidates
+                else f"multiple *.instr binaries found: {', '.join(map(str, candidates))}"))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("tracedir", nargs="?", default="traces",
                     help="directory with trace.<pid>.<tid>.bin files")
-    ap.add_argument("--exe", default="bin/matrixlab.instr",
-                    help="instrumented binary for addr2line")
+    ap.add_argument("--exe", default=None,
+                    help="instrumented binary for addr2line "
+                         "(default: the single *.instr under ./bin or .)")
     ap.add_argument("--top", type=int, default=20, help="rows per table")
     args = ap.parse_args()
+    args.exe = find_exe(args.exe)
 
     files = sorted(Path(args.tracedir).glob("trace.*.bin"))
     if not files:

@@ -1,21 +1,23 @@
-#ifndef MATRIXLAB_INSTRUMENT_TRACE_H
-#define MATRIXLAB_INSTRUMENT_TRACE_H
+#ifndef INSTRUMENT_TRACE_H
+#define INSTRUMENT_TRACE_H
 
 /*
- * Compile-time function instrumentation runtime.
+ * Portable compile-time function instrumentation runtime.
  *
- * Built into the `instrument` profile (see Makefile): all other sources are
- * compiled with -finstrument-functions, which makes GCC emit calls to the
- * two __cyg_profile_* hooks below at every function entry/exit. This file is
- * compiled WITHOUT the flag, so the hooks cannot recurse.
+ * Drop-in design: this file is self-contained and has no project
+ * dependencies. The host project compiles its sources with
+ * -finstrument-functions (see gen_flags.py for selective coverage), which
+ * makes GCC/Clang emit calls to the two __cyg_profile_* hooks below at
+ * every function entry/exit. The runtime itself is compiled WITHOUT the
+ * flag, so the hooks cannot recurse.
  *
  * Collection is inert unless enabled at runtime:
- *   MATRIXLAB_TRACE=1        enable trace collection (default: off)
- *   MATRIXLAB_TRACE_DIR=dir  output directory (default: ./traces)
- *   MATRIXLAB_TRACE_MAX=N    stop after N events globally (default: 0 = unlimited)
+ *   TRACE_ENABLE=1     enable trace collection (default: off)
+ *   TRACE_DIR=dir      output directory (default: ./traces)
+ *   TRACE_MAX=N        stop after N events globally (default: 0 = unlimited)
  *
  * Output: one binary file per thread, <dir>/trace.<pid>.<tid>.bin, resolved
- * offline with tools/trace_analyze.py.
+ * offline with trace_analyze.py.
  */
 
 #include <stdint.h>
@@ -52,4 +54,4 @@ void __cyg_profile_func_exit(void *this_fn, void *call_site)
 /* Flush the calling thread's pending events (mainly for tests) */
 void trace_flush(void) __attribute__((no_instrument_function));
 
-#endif /* MATRIXLAB_INSTRUMENT_TRACE_H */
+#endif /* INSTRUMENT_TRACE_H */
