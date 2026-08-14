@@ -38,6 +38,10 @@ CONFIG_TEMPLATE = """\
 #                         DEFINED in, so header paths work too)
 #   exclude-func <name>   never instrument functions whose name contains
 #                         <name> (compiler substring match)
+#   include-func <name> [depth]
+#                         instrument <name> and its whole call subtree
+#                         (statically resolved); optional depth limits
+#                         expansion (0 = just <name>, 1 = direct callees)
 #
 # A pattern matches a source path when it matches the full path or any
 # trailing part of it: glob ('src/net/**', '*test*.c'), exact path
@@ -51,6 +55,14 @@ CONFIG_TEMPLATE = """\
 #   include src/network/          # instrument only one subsystem
 #   exclude src/utils/rng.c       # drop a noisy file
 #   exclude-func crc32_update     # drop one hot function by name
+#   include-func handle_request   # only handle_request + everything it calls
+#   include-func handle_request 2 # same, but at most 2 call levels deep
+#
+# Runtime thread filter (no rebuild needed):
+#   TRACE_THREADS="worker-*" TRACE_ENABLE=1 ./yourapp
+#
+# Explore what a function's subtree contains:
+#   callscope select src/ --function handle_request
 """
 
 MAKE_WIRING = """\
@@ -129,12 +141,65 @@ def cmd_scan(args):
     sources = flags.scan_sources(args.directory)
     if not sources:
         sys.exit(f"no C/C++ sources under {args.directory}")
-    includes, excludes, funcs = flags.parse_config(args.config)
-    selected, dropped = flags.select(sources, includes, excludes)
-    print(f"{len(sources)} sources: {len(selected)} instrumented, "
-          f"{len(dropped)} excluded (config: {args.config})")
+    includes, excludes, funcs, include_funcs = flags.parse_config(args.config)
+    if include_funcs:
+        selected, dropped, auto_funcs, reachable, warnings = \
+            flags.function_selection(include_funcs, sources, includes,
+                                     excludes)
+        print(f"{len(sources)} sources: {len(selected)} instrumented, "
+              f"{len(dropped)} excluded; subtree: {len(reachable)} "
+              f"functions, {len(auto_funcs)} auto-excluded "
+              f"(config: {args.config})")
+        for w in warnings:
+            print(f"  warning: {w}")
+    else:
+        selected, dropped = flags.select(sources, includes, excludes)
+        print(f"{len(sources)} sources: {len(selected)} instrumented, "
+              f"{len(dropped)} excluded (config: {args.config})")
     for s in dropped:
         print(f"  excluded: {s}")
+
+
+def cmd_select(args):
+    """Explore functions/call subtrees and generate trace.config lines."""
+    from callscope import callgraph
+    sources = flags.scan_sources(args.directory)
+    if not sources:
+        sys.exit(f"no C/C++ sources under {args.directory}")
+    graph = callgraph.build_graph(sources)
+
+    if args.list:
+        for name in sorted(graph):
+            files = ", ".join(sorted(set(graph[name]["files"])))
+            print(f"{name}  ({files})")
+        return
+
+    if not args.function:
+        sys.exit("select: give --function NAME (or --list)")
+
+    lines = []
+    for seed in args.function:
+        if seed not in graph:
+            sys.exit(f"'{seed}' not defined in the scanned sources "
+                     f"(try: callscope select {args.directory} --list)")
+        sub = callgraph.expand(graph, [seed], args.depth)
+        files = sorted({f for fn in sub for f in graph[fn]["files"]})
+        dstr = "full depth" if args.depth is None else f"depth={args.depth}"
+        print(f"{seed}: {len(sub)} functions across {len(files)} files "
+              f"({dstr})")
+        for fn in sorted(sub):
+            print(f"    {fn}")
+        lines.append(f"include-func {seed}"
+                     + (f" {args.depth}" if args.depth is not None else ""))
+
+    print()
+    print("# add to trace.config:")
+    for line in lines:
+        print(line)
+    if args.threads:
+        print()
+        print("# and to trace only matching threads at runtime:")
+        print(f'TRACE_THREADS="{args.threads}" TRACE_ENABLE=1 ./yourapp')
 
 
 def cmd_ui(args):
@@ -187,6 +252,20 @@ def main(argv=None):
     p_scan.add_argument("directory", help="source tree to scan")
     p_scan.add_argument("--config", default="trace.config")
     p_scan.set_defaults(func=cmd_scan)
+
+    p_sel = sub.add_parser("select", help="explore functions/subtrees and "
+                                          "generate trace.config lines")
+    p_sel.add_argument("directory", help="source tree to scan")
+    p_sel.add_argument("--function", "-f", action="append",
+                       help="seed function (repeatable)")
+    p_sel.add_argument("--depth", "-d", type=int, default=None,
+                       help="limit call-subtree expansion depth "
+                            "(default: full subtree)")
+    p_sel.add_argument("--threads", "-t", default=None,
+                       help="also print a TRACE_THREADS runtime hint")
+    p_sel.add_argument("--list", "-l", action="store_true",
+                       help="list all defined functions")
+    p_sel.set_defaults(func=cmd_select)
 
     p_ui = sub.add_parser("ui", help="start the web UI (needs callscope[ui])")
     p_ui.add_argument("--host", default="127.0.0.1")

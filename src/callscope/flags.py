@@ -19,6 +19,10 @@ Config syntax (one directive per line, '#' comments, blank lines ignored):
     exclude <pattern>        never instrument matching sources
     exclude-func <name>      never instrument functions whose (mangled) name
                              contains <name>  (compiler substring match)
+    include-func <name> [N]  instrument <name> and its whole call subtree
+                             (statically resolved via callgraph.py);
+                             optional N limits expansion depth
+                             (0 = just <name>, 1 = direct callees, ...)
 
 Pattern matching against a source path (as passed to the compiler, e.g.
 'src/utils/rng.c') succeeds when the pattern matches the full path or any
@@ -38,6 +42,12 @@ Notes:
     header helpers.
   - Function exclusion maps to -finstrument-functions-exclude-function-list
     (substring match on symbol names).
+  - include-func is compiled down to those two primitives: the files
+    defining the subtree get instrumented, and every other function defined
+    in those files is added to the function exclude list (with a guard
+    against substring collisions — the compiler's exclude match is a
+    substring match, so an auto-exclude that is a prefix of a selected
+    function would silently disable it).
   - Both compile-time excludes are FREE at runtime: no hook is emitted at
     all. Prefer them over any runtime filtering.
 """
@@ -47,11 +57,17 @@ import fnmatch
 import os
 import sys
 
+try:
+    from callscope import callgraph
+except ImportError:  # direct execution: python3 src/callscope/flags.py
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from callscope import callgraph
+
 SOURCE_SUFFIXES = (".c", ".cc", ".cpp")
 
 
 def parse_config(path):
-    includes, excludes, funcs = [], [], []
+    includes, excludes, funcs, include_funcs = [], [], [], []
     with open(path) as f:
         for lineno, raw in enumerate(f, 1):
             line = raw.strip()
@@ -67,10 +83,22 @@ def parse_config(path):
                 excludes.append(value)
             elif directive == "exclude-func":
                 funcs.append(value)
+            elif directive == "include-func":
+                name, _, depth = value.partition(" ")
+                if depth:
+                    try:
+                        depth = int(depth)
+                    except ValueError:
+                        sys.exit(f"{path}:{lineno}: include-func depth must "
+                                 f"be an integer, got '{depth}'")
+                else:
+                    depth = None
+                include_funcs.append((name, depth))
             else:
                 sys.exit(f"{path}:{lineno}: unknown directive '{directive}' "
-                         f"(want: include, exclude, exclude-func)")
-    return includes, excludes, funcs
+                         f"(want: include, exclude, exclude-func, "
+                         f"include-func)")
+    return includes, excludes, funcs, include_funcs
 
 
 def matches(path, pattern):
@@ -115,16 +143,12 @@ def scan_sources(directory):
     return sources
 
 
-def instrument_flags(includes, excludes, funcs, sources):
-    """Return the flag string: -finstrument-functions plus exclude lists."""
-    _selected, dropped = select(sources, includes, excludes)
-
-    # Header excludes must be passed through verbatim: they don't match any
-    # source path, but the compiler matches them against definition files.
-    file_excludes = [p for p in excludes] + dropped
+def format_flags(file_excludes, funcs):
+    """Assemble the compiler flag string from final exclude lists."""
     # De-duplicate while keeping order.
     seen = set()
     file_excludes = [p for p in file_excludes if not (p in seen or seen.add(p))]
+    funcs = [f for f in funcs if not (f in seen or seen.add(f))]
 
     flags = "-finstrument-functions"
     if file_excludes:
@@ -132,6 +156,84 @@ def instrument_flags(includes, excludes, funcs, sources):
     if funcs:
         flags += " -finstrument-functions-exclude-function-list=" + ",".join(funcs)
     return flags
+
+
+def instrument_flags(includes, excludes, funcs, sources):
+    """Return the flag string: -finstrument-functions plus exclude lists."""
+    _selected, dropped = select(sources, includes, excludes)
+
+    # Header excludes must be passed through verbatim: they don't match any
+    # source path, but the compiler matches them against definition files.
+    return format_flags([p for p in excludes] + dropped, funcs)
+
+
+def function_selection(include_funcs, sources, includes, excludes):
+    """Expand include-func seeds into a file/function selection.
+
+    Returns (selected, dropped, extra_exclude_funcs, reachable, warnings):
+    the source selection, additional exclude-func entries, the reachable
+    function set, and human-readable warnings (unknown seeds, substring
+    collisions dropped from the auto-excludes)."""
+    # Headers are parsed too: inline/static helpers DEFINED in a header are
+    # compiled into every including TU, so file-level exclusion of the .c
+    # files does not silence them — they can only be excluded by name.
+    headers = []
+    seen_dirs = set()
+    for s in sources:
+        d = os.path.dirname(s) or "."
+        if d and d not in seen_dirs:
+            seen_dirs.add(d)
+            for ext in (".h", ".hpp", ".hh"):
+                headers.extend(os.path.join(d, f)
+                               for f in os.listdir(d) if f.endswith(ext))
+    graph = callgraph.build_graph(list(sources) + headers)
+    warnings = []
+    seeds = []
+    for name, depth in include_funcs:
+        if name not in graph:
+            sys.exit(f"include-func: '{name}' not found in the scanned "
+                     f"sources (function pointers and macro-generated calls "
+                     f"are not followed; defined functions are listed by "
+                     f"'callscope select --list')")
+        seeds.append(name)
+    # Expand each seed with its own depth limit.
+    reachable = set()
+    for name, depth in include_funcs:
+        reachable |= callgraph.expand(graph, [name], depth)
+
+    # Headers contribute names to the graph but are not compile units:
+    # file-level selection only covers actual sources.
+    files_needed = {f for fn in reachable for f in graph[fn]["files"]
+                    if f.endswith(SOURCE_SUFFIXES)}
+    selected = set(files_needed)
+    if includes:  # explicit file includes union with the subtree files
+        selected |= {s for s in sources
+                     if any(matches(s, p) for p in includes)}
+    selected = {s for s in selected
+                if not any(matches(s, p) for p in excludes)}
+    dropped = [s for s in sources if s not in selected]
+
+    # Everything defined in the selected files but NOT reachable from the
+    # seeds must not be traced: auto-exclude it by name. Header-defined
+    # functions are auto-excluded too regardless of location — they are
+    # compiled into arbitrary (possibly excluded) TUs and would leak.
+    auto = sorted({fn for fn in graph
+                   if fn not in reachable
+                   and any(f in selected or not f.endswith(SOURCE_SUFFIXES)
+                           for f in graph[fn]["files"])})
+    # The compiler's exclude-function-list is a SUBSTRING match: an
+    # auto-exclude that is a substring of a selected function's name would
+    # silently disable the selected function. Drop such entries and warn.
+    guarded = []
+    for a in auto:
+        victim = next((r for r in reachable if a != r and a in r), None)
+        if victim:
+            warnings.append(f"auto-exclude '{a}' skipped: it is a substring "
+                            f"of selected function '{victim}' (compiler "
+                            f"substring matching would disable both)")
+        else:
+            guarded.append(a)
+    return sorted(selected), dropped, guarded, reachable, warnings
 
 
 def main(argv=None):
@@ -155,9 +257,16 @@ def main(argv=None):
     if not sources:
         sys.exit("no sources given (use -- src/... or --scan DIR)")
 
-    includes, excludes, funcs = parse_config(args.config)
-    selected, dropped = select(sources, includes, excludes)
-    flags = instrument_flags(includes, excludes, funcs, sources)
+    includes, excludes, funcs, include_funcs = parse_config(args.config)
+    reachable, warnings = None, []
+    if include_funcs:
+        selected, dropped, auto_funcs, reachable, warnings = \
+            function_selection(include_funcs, sources, includes, excludes)
+        flags = format_flags(list(excludes) + dropped,
+                             list(funcs) + auto_funcs)
+    else:
+        selected, dropped = select(sources, includes, excludes)
+        flags = instrument_flags(includes, excludes, funcs, sources)
 
     if args.format == "make":
         print(f"CFLAGS_INSTRUMENT = $(CFLAGS_SYMBOLS) {flags}")
@@ -174,6 +283,13 @@ def main(argv=None):
             print(f"excludes:  {', '.join(excludes)}", file=sys.stderr)
         if funcs:
             print(f"functions: {', '.join(funcs)}", file=sys.stderr)
+        if include_funcs:
+            spec = ", ".join(n if d is None else f"{n} depth={d}"
+                             for n, d in include_funcs)
+            print(f"include-func: {spec} -> {len(reachable)} functions in "
+                  f"subtree", file=sys.stderr)
+        for w in warnings:
+            print(f"warning: {w}", file=sys.stderr)
         for s in dropped:
             print(f"  excluded: {s}", file=sys.stderr)
 

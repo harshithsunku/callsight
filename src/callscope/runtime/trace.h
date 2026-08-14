@@ -19,6 +19,9 @@
  *                      files (drained by a trace_stream client; see
  *                      trace_shm.h). Falls back to files if unavailable.
  *   TRACE_SHM_SIZE=N   ring capacity in bytes (default: 16 MiB)
+ *   TRACE_THREADS=globs  trace only threads whose name matches one of the
+ *                      comma-separated globs (e.g. "sort-*,worker-1");
+ *                      default: all threads
  *
  * Output: one binary file per thread, <dir>/trace.<pid>.<tid>.bin, resolved
  * offline with trace_analyze.py. In streaming mode the server side writes

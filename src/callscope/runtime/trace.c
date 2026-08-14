@@ -21,10 +21,24 @@
  * drains, events are DROPPED (counted in the ring header) — profiling must
  * never stall the workload. If the shm segment cannot be attached, the
  * runtime warns and falls back to file mode.
+ *
+ * Thread filter (TRACE_THREADS="sort-*,worker-1"): comma-separated glob
+ * patterns matched against the thread name (see pthread_setname_np) once,
+ * at the thread's first hook call. Non-matching threads record nothing.
+ * Unset = all threads.
  */
+
+/* pthread_getname_np (TRACE_THREADS filter) is a GNU extension; define it
+ * before any libc header so this file stays drop-in for projects that
+ * don't set it. */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 
 #include "trace.h"
 #include "trace_shm.h"
+
+#include <fnmatch.h>
 
 #include <pthread.h>
 #include <stdatomic.h>
@@ -51,6 +65,7 @@ static uint64_t        g_trace_max = 0;      /* 0 = unlimited */
 static atomic_uint_fast64_t g_trace_count = 0;
 static int             g_trace_stopped = 0;  /* set once cap is reached */
 static trace_shm_header_t *g_shm = NULL;     /* non-NULL: streaming mode */
+static char            g_thread_patterns[512] = ""; /* TRACE_THREADS globs */
 
 /* --- Per-thread state --- */
 
@@ -60,6 +75,8 @@ typedef struct {
     FILE         *out;
     uint32_t      tid;
     int           in_hook;    /* reentrancy guard */
+    int           skip;       /* thread filtered out by TRACE_THREADS */
+    uint32_t      skip_checks; /* recheck cadence while skipped */
 } trace_tls_t;
 
 static __thread trace_tls_t *tl_trace = NULL;
@@ -139,6 +156,11 @@ NOINSTR static void trace_global_init(void) {
         g_trace_max = strtoull(env, NULL, 10);
     }
 
+    env = getenv("TRACE_THREADS");
+    if (env) {
+        snprintf(g_thread_patterns, sizeof(g_thread_patterns), "%s", env);
+    }
+
     if (!g_trace_enabled) return;
 
     env = getenv("TRACE_SHM");
@@ -166,6 +188,55 @@ NOINSTR static void trace_global_init(void) {
 
 /* --- Per-thread lazy init --- */
 
+/* Match the calling thread's name against the TRACE_THREADS glob list.
+ * Called at thread start and periodically while the thread is skipped
+ * (threads set their name after their first hooks fire). */
+NOINSTR static int trace_thread_filtered(void) {
+    if (g_thread_patterns[0] == '\0') return 0;
+
+    char name[16] = "";
+    pthread_getname_np(pthread_self(), name, sizeof(name));
+
+    /* comma-separated globs, matched without strtok (not thread-safe) */
+    const char *p = g_thread_patterns;
+    while (*p) {
+        const char *comma = strchr(p, ',');
+        size_t len = comma ? (size_t)(comma - p) : strlen(p);
+        char pat[64];
+        if (len >= sizeof(pat)) len = sizeof(pat) - 1;
+        memcpy(pat, p, len);
+        pat[len] = '\0';
+        if (fnmatch(pat[0] == ' ' ? pat + 1 : pat, name, 0) == 0)
+            return 0;
+        if (!comma) break;
+        p = comma + 1;
+    }
+    return 1;
+}
+
+/* Open this thread's output (file mode) or confirm streaming (shm mode).
+ * Returns 1 when the thread is ready to record. Split out of tls_get so a
+ * thread that matched TRACE_THREADS late can complete its setup then. */
+NOINSTR static int trace_tls_activate(trace_tls_t *tls) {
+    if (g_shm)
+        return 1;  /* streaming: nothing per-thread to open */
+
+    char path[600];
+    snprintf(path, sizeof(path), "%s/trace.%d.%u.bin",
+             g_trace_dir, (int)getpid(), tls->tid);
+    tls->out = fopen(path, "ab");
+    if (!tls->out)
+        return 0;
+
+    trace_file_header_t hdr;
+    memset(&hdr, 0, sizeof(hdr));
+    memcpy(hdr.magic, TRACE_FILE_MAGIC, sizeof(hdr.magic));
+    hdr.version = TRACE_FILE_VERSION;
+    hdr.event_size = (uint32_t)sizeof(trace_event_t);
+    fwrite(&hdr, sizeof(hdr), 1, tls->out);
+    return 1;
+}
+
 NOINSTR static trace_tls_t *trace_tls_get(void) {
     trace_tls_t *tls = tl_trace;
     if (tls) return tls;
@@ -174,29 +245,11 @@ NOINSTR static trace_tls_t *trace_tls_get(void) {
     if (!tls) return NULL;
 
     tls->tid = (uint32_t)syscall(SYS_gettid);
-
-    if (g_shm) {
-        /* streaming mode: no per-thread file, events go to the shm ring */
-        tl_trace = tls;
-        pthread_setspecific(g_trace_key, tls);
-        return tls;
-    }
-
-    char path[600];
-    snprintf(path, sizeof(path), "%s/trace.%d.%u.bin",
-             g_trace_dir, (int)getpid(), tls->tid);
-    tls->out = fopen(path, "ab");
-    if (!tls->out) {
+    tls->skip = trace_thread_filtered();
+    if (!tls->skip && !trace_tls_activate(tls)) {
         free(tls);
         return NULL;
     }
-
-    trace_file_header_t hdr;
-    memset(&hdr, 0, sizeof(hdr));
-    memcpy(hdr.magic, TRACE_FILE_MAGIC, sizeof(hdr.magic));
-    hdr.version = TRACE_FILE_VERSION;
-    hdr.event_size = (uint32_t)sizeof(trace_event_t);
-    fwrite(&hdr, sizeof(hdr), 1, tls->out);
 
     tl_trace = tls;
     pthread_setspecific(g_trace_key, tls);
@@ -211,6 +264,16 @@ NOINSTR static void trace_record(void *this_fn, void *call_site, uint8_t kind) {
 
     trace_tls_t *tls = trace_tls_get();
     if (!tls || tls->in_hook) return;
+    if (tls->skip) {
+        /* Threads commonly set their name AFTER the first hook fires, so
+         * a one-time check would filter them out under their inherited
+         * default name. Re-check every 64 hook calls until matched; on a
+         * match the thread completes the setup it skipped. */
+        if (tls->skip == 1 && (++tls->skip_checks & 63u) == 0 &&
+            !trace_thread_filtered())
+            tls->skip = trace_tls_activate(tls) ? 0 : 2; /* 2 = dead */
+        return;
+    }
     tls->in_hook = 1;
 
     if (g_trace_max > 0) {

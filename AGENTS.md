@@ -90,6 +90,9 @@ hotspots (cmake_demo must show only `fib` — `mix` is excluded).
 - Streaming mode (`TRACE_SHM`) must never stall the workload: when the
   shared-memory ring is full, drop events and count them in the ring
   header. No disk or network I/O in the traced process.
+- The hook hot path in trace.c is per-thread and lock-free; anything
+  thread-related (e.g. TRACE_THREADS matching) must not use process-global
+  state (no strtok) and stays out of the flush path.
 - The wire protocol and ring layout live only in
   `src/callscope/runtime/trace_shm.h`; bump `TRACE_SHM_VERSION` /
   `TRACE_STREAM_VERSION` on any layout change.
@@ -101,7 +104,10 @@ hotspots (cmake_demo must show only `fib` — `mix` is excluded).
   `TRACE_DIR`, `TRACE_MAX`). matrixlab's own config uses `MATRIXLAB_*` —
   keep the two namespaces separate.
 - Selection rules live only in the target project's `trace.config`; do not
-  hard-code exclude lists in Makefiles or CMake files.
+  hard-code exclude lists in Makefiles or CMake files. Supported
+  directives: `include`, `exclude`, `exclude-func`, `include-func`
+  (call-subtree selection via `callgraph.py`; auto-excludes must keep the
+  substring-collision guard).
 - `CALLSCOPE_COMMAND` in CMake is a cache variable — pass it with `-D`
   (a plain `set()` before `include(CallScope)` gets shadowed by the cache
   definition under CMP0126).

@@ -118,6 +118,22 @@ def save_config(body: ConfigBody):
     return {"ok": True}
 
 
+@app.get("/api/subtree")
+def subtree(path: str, function: str, depth: int = None):
+    """Resolve a function's call subtree for the config editor."""
+    from callscope import callgraph
+    p = project_path(path)
+    sources = flags.scan_sources(p)
+    graph = callgraph.build_graph(sources)
+    if function not in graph:
+        raise HTTPException(404, f"'{function}' not defined under {p}")
+    sub = callgraph.expand(graph, [function], depth)
+    files = sorted({f for fn in sub for f in graph[fn]["files"]})
+    line = f"include-func {function}" + (f" {depth}" if depth is not None
+                                         else "")
+    return {"functions": sorted(sub), "files": files, "config_line": line}
+
+
 @app.get("/api/scan")
 def scan(path: str):
     p = project_path(path)
@@ -125,7 +141,17 @@ def scan(path: str):
     if not config.exists():
         raise HTTPException(400, "no trace.config — save one first")
     sources = flags.scan_sources(p)
-    includes, excludes, funcs = flags.parse_config(config)
+    includes, excludes, funcs, include_funcs = flags.parse_config(config)
+    if include_funcs:
+        try:
+            selected, dropped, auto_funcs, reachable, warnings = \
+                flags.function_selection(include_funcs, sources, includes,
+                                         excludes)
+        except SystemExit as e:
+            raise HTTPException(400, str(e))
+        return {"total": len(sources), "instrumented": len(selected),
+                "excluded": dropped, "subtree": sorted(reachable),
+                "warnings": warnings}
     selected, dropped = flags.select(sources, includes, excludes)
     return {"total": len(sources), "instrumented": len(selected),
             "excluded": dropped}

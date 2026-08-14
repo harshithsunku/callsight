@@ -74,6 +74,12 @@
     <button class="ghost" onclick="scan()">Preview selection</button>
     <span id="scanresult" class="dim"></span>
   </div>
+  <div class="row" style="margin-top:10px">
+    <label class="dim">function <input type="text" id="fnname" style="width:180px" placeholder="handle_request"></label>
+    <label class="dim">depth <input type="number" id="fndepth" style="width:60px" placeholder="full"></label>
+    <button class="ghost" onclick="addSubtree()">Add call subtree</button>
+    <span id="fnresult" class="dim"></span>
+  </div>
 </section>
 
 <section>
@@ -164,8 +170,28 @@ async function scan() {
     const d = await api("/api/scan?path=" + encodeURIComponent(project));
     document.getElementById("scanresult").textContent =
       `${d.total} sources: ${d.instrumented} instrumented, ${d.excluded.length} excluded` +
+      (d.subtree ? ` · subtree: ${d.subtree.length} functions` : "") +
       (d.excluded.length ? ` (${d.excluded.slice(0,5).join(", ")}${d.excluded.length>5?", …":""})` : "");
   } catch (e) { setStatus(e.message, "err"); }
+}
+
+async function addSubtree() {
+  const fn = document.getElementById("fnname").value.trim();
+  if (!fn) { setStatus("enter a function name", "err"); return; }
+  const depth = document.getElementById("fndepth").value;
+  try {
+    const d = await api("/api/subtree?path=" + encodeURIComponent(project)
+        + "&function=" + encodeURIComponent(fn)
+        + (depth ? "&depth=" + encodeURIComponent(depth) : ""));
+    const ta = document.getElementById("config");
+    ta.value = ta.value.replace(/\s*$/, "") + "\n\n# " + fn + " call subtree ("
+             + d.functions.length + " functions, " + d.files.length + " files)\n"
+             + d.config_line + "\n";
+    document.getElementById("fnresult").textContent =
+      `${d.functions.length} functions across ${d.files.length} files — line added, review & save`;
+  } catch (e) {
+    document.getElementById("fnresult").textContent = e.message;
+  }
 }
 
 async function build() {

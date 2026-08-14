@@ -88,15 +88,21 @@ millions of events per second. Levers, cheapest first:
    Typically cuts volume 10–100×.
 2. **`include` directives**: instrument only the subsystem under
    investigation.
-3. **Runtime gating**: `TRACE_ENABLE` / `TRACE_MAX` control *when* and *how
-   much* you pay.
-4. **Source opt-out** (optional): `__attribute__((no_instrument_function))`.
+3. **`include-func` (function/task level)**: name one entry function and
+   callscope instruments exactly its call subtree, resolved statically
+   from the sources — `include-func workload_sort` traces
+   `workload_sort` and everything it calls, nothing else. Explore first
+   with `callscope select src/ --function workload_sort`.
+4. **Runtime gating**: `TRACE_ENABLE` / `TRACE_MAX` control *when* and *how
+   much* you pay; `TRACE_THREADS="sort-*"` traces only matching threads.
+5. **Source opt-out** (optional): `__attribute__((no_instrument_function))`.
 
 `callscope scan <dir> --config trace.config` previews what a config selects.
 
 Runtime knobs: `TRACE_ENABLE` (default off), `TRACE_DIR` (default
 `./traces`), `TRACE_MAX` (global event cap — always set one for long runs),
-`TRACE_SHM` / `TRACE_SHM_SIZE` (streaming mode, see above).
+`TRACE_THREADS` (thread-name glob filter), `TRACE_SHM` / `TRACE_SHM_SIZE`
+(streaming mode, see below).
 
 ## Remote streaming (devices, embedded)
 
@@ -135,6 +141,7 @@ TRACE_ENABLE=1 TRACE_SHM=/callscope0 ./yourapp.instr
 |---|---|
 | `callscope init <dir> [--build make\|cmake]` | adopt into a project |
 | `callscope scan <dir> [--config c]` | preview instrumentation selection |
+| `callscope select <dir> --function F [--depth N]` | show a function's call subtree; emit config lines |
 | `callscope flags --config c -- srcs...` | print compiler flags (build integrations use this) |
 | `callscope analyze [traces/] [--exe bin] [--top N]` | hotspot report |
 | `callscope ui [--host H] [--port P]` | web UI (needs `callscope[ui]`) |

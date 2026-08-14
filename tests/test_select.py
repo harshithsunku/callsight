@@ -25,11 +25,20 @@ class TestParseConfig(unittest.TestCase):
             "\n"
             "include src/net/**\n"
             "exclude src/utils/rng.c\n"
-            "exclude-func crc32_update\n")
-        includes, excludes, funcs = flags.parse_config(path)
+            "exclude-func crc32_update\n"
+            "include-func handle_request\n"
+            "include-func process 2\n")
+        includes, excludes, funcs, include_funcs = flags.parse_config(path)
         self.assertEqual(includes, ["src/net/**"])
         self.assertEqual(excludes, ["src/utils/rng.c"])
         self.assertEqual(funcs, ["crc32_update"])
+        self.assertEqual(include_funcs, [("handle_request", None),
+                                         ("process", 2)])
+
+    def test_include_func_bad_depth_exits(self):
+        path = self.write("include-func main deep\n")
+        with self.assertRaises(SystemExit):
+            flags.parse_config(path)
 
     def test_unknown_directive_exits(self):
         path = self.write("frobnicate src/\n")

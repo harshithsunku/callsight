@@ -9,8 +9,10 @@ remote streaming from constrained devices over ZSTD-compressed TCP.
 
 | component | state | evidence |
 |---|---|---|
-| Core engine (`flags`, `analyze`) | ✅ done | 17/17 unit tests |
-| CLI (`init` / `scan` / `flags` / `analyze`) | ✅ done | adoption drill on a foreign copy of matrixlab: build → run → analyze clean |
+| Core engine (`flags`, `analyze`) | ✅ done | 31/31 unit tests |
+| CLI (`init` / `scan` / `select` / `flags` / `analyze`) | ✅ done | adoption drill on a foreign copy of matrixlab: build → run → analyze clean |
+| Function/task-level selection (`include-func` + call graph) | ✅ done | `include-func workload_sort` e2e: only the 31-function subtree traced, `unmatched_exits=0` |
+| Thread-level selection (`TRACE_THREADS`) | ✅ done | `TRACE_THREADS='sort-*'` e2e: 3 of 26 threads traced |
 | Make integration | ✅ done | matrixlab e2e: `unmatched_exits=0` |
 | CMake integration | ✅ done | `tests/cmake_demo` e2e: `unmatched_exits=0`; normal builds carry zero hooks |
 | Web UI (`callscope ui`) | ✅ done | full API-driven cycle (browse → config → build → run → report) on both fixtures |
