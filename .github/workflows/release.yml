@@ -30,8 +30,9 @@ jobs:
         run: uv build
 
       - name: Create GitHub Release
-        run: gh release create "${{ github.ref_name }}" dist/* \
-               --generate-notes --verify-tag
+        run: |
+          gh release create "${{ github.ref_name }}" dist/* \
+            --generate-notes --verify-tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
