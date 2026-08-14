@@ -1,0 +1,39 @@
+# Makefile.tracekit — add compile-time function tracing to a GNU Make project.
+#
+# Usage in your Makefile (after SRCS is defined):
+#
+#     TRACEKIT_DIR ?= tracekit
+#     include $(TRACEKIT_DIR)/Makefile.tracekit
+#
+#     instrument: CFLAGS = $(CFLAGS_INSTRUMENT)
+#     instrument: $(BINDIR)/$(TARGET).instr
+#     $(BINDIR)/$(TARGET).instr: $(OBJS) $(TRACE_OBJ) | $(BINDIR)
+#         $(CC) $(CFLAGS_INSTRUMENT) -no-pie -o $@ $(OBJS) $(TRACE_OBJ) $(LDFLAGS)
+#
+# Expected from the including Makefile:
+#   SRCS            source file list (as passed to the compiler)
+#   CC, BUILDDIR    compiler and object directory
+#   CFLAGS_SYMBOLS  your normal flags with -g (base for CFLAGS_INSTRUMENT)
+# Overridable:
+#   TRACEKIT_DIR     where trace.c/trace.h live          (default: tracekit)
+#   TRACEKIT_CONFIG  selection config                    (default: ./trace.config)
+#   TRACEKIT         command that prints the flags       (default: tracekit)
+#
+# -no-pie is required at link time: it keeps runtime addresses equal to link
+# addresses so `tracekit analyze` can feed them to addr2line directly.
+
+TRACEKIT_DIR     ?= tracekit
+TRACEKIT_CONFIG  ?= trace.config
+TRACEKIT         ?= tracekit
+
+# CFLAGS_INSTRUMENT = your CFLAGS_SYMBOLS + -finstrument-functions + the
+# exclude lists derived from TRACEKIT_CONFIG and SRCS.
+$(eval $(shell $(TRACEKIT) flags --config $(TRACEKIT_CONFIG) -- $(SRCS) 2>/dev/null))
+
+TRACE_OBJ = $(BUILDDIR)/tracekit_runtime/trace.o
+
+# Instrumentation runtime: compiled WITHOUT -finstrument-functions (via
+# CFLAGS_SYMBOLS, not CFLAGS_INSTRUMENT) so the hooks cannot recurse.
+$(TRACE_OBJ): $(TRACEKIT_DIR)/trace.c $(TRACEKIT_DIR)/trace.h | $(BUILDDIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS_SYMBOLS) -c -o $@ $<

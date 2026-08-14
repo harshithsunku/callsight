@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-Offline analyzer for compile-time traces produced by the instrument toolkit.
+Offline analyzer for compile-time traces produced by the tracekit runtime.
 
 Reads the binary trace files written by trace.c, resolves function addresses
 with addr2line (static functions included), matches enter/exit events per
 thread, and reports per-function call counts and inclusive/self times.
 
 Usage:
-    python3 trace_analyze.py [traces/] [--exe path/to/binary] [--top 20]
+    tracekit analyze [traces/] [--exe path/to/binary] [--top 20]
 
 If --exe is omitted, a single `*.instr` binary is looked up under ./bin and .
-Build instrumented binaries with -no-pie (the toolkit Makefile snippet does
+Build instrumented binaries with -no-pie (the Make/CMake integrations do
 this) so recorded runtime addresses can be fed to addr2line directly.
 """
 
@@ -63,7 +63,7 @@ def resolve(addrs, exe):
     return names
 
 
-def analyze(events, names):
+def analyze(events):
     """Match enter/exit per thread; return per-function stats and thread info."""
     calls = defaultdict(int)
     incl = defaultdict(int)   # inclusive ns
@@ -121,21 +121,15 @@ def find_exe(arg):
                 else f"multiple *.instr binaries found: {', '.join(map(str, candidates))}"))
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("tracedir", nargs="?", default="traces",
-                    help="directory with trace.<pid>.<tid>.bin files")
-    ap.add_argument("--exe", default=None,
-                    help="instrumented binary for addr2line "
-                         "(default: the single *.instr under ./bin or .)")
-    ap.add_argument("--top", type=int, default=20, help="rows per table")
-    args = ap.parse_args()
-    args.exe = find_exe(args.exe)
+def report(tracedir, exe, top):
+    """Analyze all trace files in tracedir and print the hotspot report.
 
-    files = sorted(Path(args.tracedir).glob("trace.*.bin"))
+    Returns the unmatched_exits count (0 means a clean trace)."""
+    exe = find_exe(exe)
+
+    files = sorted(Path(tracedir).glob("trace.*.bin"))
     if not files:
-        sys.exit(f"no trace files in {args.tracedir}")
+        sys.exit(f"no trace files in {tracedir}")
 
     events = []
     for f in files:
@@ -143,8 +137,8 @@ def main():
     if not events:
         sys.exit("trace files contained no events")
 
-    names = resolve({ev[2] for ev in events}, args.exe)
-    stats, threads, unmatched, open_frames = analyze(events, names)
+    names = resolve({ev[2] for ev in events}, exe)
+    stats, threads, unmatched, open_frames = analyze(events)
 
     span_ns = max(t[1] for t in threads.values()) - min(t[0] for t in threads.values())
     print(f"events={len(events)} threads={len(threads)} "
@@ -156,8 +150,8 @@ def main():
     for label, key in (("TOP BY SELF TIME", 2), ("TOP BY INCLUSIVE TIME", 1)):
         print(f"== {label} ==")
         print(hdr)
-        top = sorted(stats.items(), key=lambda kv: kv[1][key], reverse=True)[:args.top]
-        for func, (calls, incl, self_t, max_t) in top:
+        top_rows = sorted(stats.items(), key=lambda kv: kv[1][key], reverse=True)[:top]
+        for func, (calls, incl, self_t, max_t) in top_rows:
             fn, loc = names.get(func, ("??", "??:0"))
             print(f"{calls:>10} {fmt_ms(incl)} {fmt_ms(self_t)} {fmt_ms(max_t)}  "
                   f"{fn} ({loc})")
@@ -171,6 +165,21 @@ def main():
     for tid in sorted(per_tid):
         t0, t1 = threads[tid]
         print(f"{tid:>8} {per_tid[tid]:>10} {fmt_ms(t1 - t0)}")
+
+    return unmatched
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("tracedir", nargs="?", default="traces",
+                    help="directory with trace.<pid>.<tid>.bin files")
+    ap.add_argument("--exe", default=None,
+                    help="instrumented binary for addr2line "
+                         "(default: the single *.instr under ./bin or .)")
+    ap.add_argument("--top", type=int, default=20, help="rows per table")
+    args = ap.parse_args(argv)
+    report(args.tracedir, args.exe, args.top)
 
 
 if __name__ == "__main__":

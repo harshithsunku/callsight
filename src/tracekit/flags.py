@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """
-gen_flags.py — generate selective compile-time instrumentation flags.
+flags.py — generate selective compile-time instrumentation flags.
 
 Reads a trace.config plus the project's source file list, decides which
-translation units get -finstrument-functions, and prints a Makefile fragment
-(CFLAGS_INSTRUMENT) to stdout. Typical use inside a Makefile:
+translation units get -finstrument-functions, and prints the resulting
+compiler flags. Typical use inside a Makefile:
 
-    $(eval $(shell python3 $(INSTR_DIR)/gen_flags.py \
-        --config $(INSTR_DIR)/trace.config -- $(SRCS)))
+    $(eval $(shell tracekit flags --config trace.config -- $(SRCS)))
 
 or standalone:
 
-    python3 gen_flags.py --config trace.config --scan src --print
+    python3 flags.py --config trace.config --scan src --print
 
 Config syntax (one directive per line, '#' comments, blank lines ignored):
 
@@ -47,6 +46,8 @@ import argparse
 import fnmatch
 import os
 import sys
+
+SOURCE_SUFFIXES = (".c", ".cc", ".cpp")
 
 
 def parse_config(path):
@@ -94,29 +95,19 @@ def select(sources, includes, excludes):
     return selected, dropped
 
 
-def main():
-    ap = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config", required=True, help="trace.config path")
-    ap.add_argument("--scan", metavar="DIR",
-                    help="recursively collect *.c/*.cc/*.cpp under DIR")
-    ap.add_argument("--print", action="store_true",
-                    help="human-readable selection summary on stderr")
-    ap.add_argument("sources", nargs="*", help="source files (after --)")
-    args = ap.parse_args()
+def scan_sources(directory):
+    """Recursively collect C/C++ sources under directory."""
+    sources = []
+    for root, _dirs, files in os.walk(directory):
+        for f in files:
+            if f.endswith(SOURCE_SUFFIXES):
+                sources.append(os.path.join(root, f))
+    return sources
 
-    sources = list(args.sources)
-    if args.scan:
-        for root, _dirs, files in os.walk(args.scan):
-            for f in files:
-                if f.endswith((".c", ".cc", ".cpp")):
-                    sources.append(os.path.join(root, f))
 
-    if not sources:
-        sys.exit("no sources given (use -- src/... or --scan DIR)")
-
-    includes, excludes, funcs = parse_config(args.config)
-    selected, dropped = select(sources, includes, excludes)
+def instrument_flags(includes, excludes, funcs, sources):
+    """Return the flag string: -finstrument-functions plus exclude lists."""
+    _selected, dropped = select(sources, includes, excludes)
 
     # Header excludes must be passed through verbatim: they don't match any
     # source path, but the compiler matches them against definition files.
@@ -125,12 +116,43 @@ def main():
     seen = set()
     file_excludes = [p for p in file_excludes if not (p in seen or seen.add(p))]
 
-    flags = "CFLAGS_INSTRUMENT = $(CFLAGS_SYMBOLS) -finstrument-functions"
+    flags = "-finstrument-functions"
     if file_excludes:
         flags += " -finstrument-functions-exclude-file-list=" + ",".join(file_excludes)
     if funcs:
         flags += " -finstrument-functions-exclude-function-list=" + ",".join(funcs)
-    print(flags)
+    return flags
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--config", required=True, help="trace.config path")
+    ap.add_argument("--scan", metavar="DIR",
+                    help="recursively collect *.c/*.cc/*.cpp under DIR")
+    ap.add_argument("--format", choices=("make", "raw"), default="make",
+                    help="'make' prints a CFLAGS_INSTRUMENT assignment for "
+                         "$(eval $(shell ...)), 'raw' prints only the flags")
+    ap.add_argument("--print", action="store_true",
+                    help="human-readable selection summary on stderr")
+    ap.add_argument("sources", nargs="*", help="source files (after --)")
+    args = ap.parse_args(argv)
+
+    sources = list(args.sources)
+    if args.scan:
+        sources.extend(scan_sources(args.scan))
+
+    if not sources:
+        sys.exit("no sources given (use -- src/... or --scan DIR)")
+
+    includes, excludes, funcs = parse_config(args.config)
+    selected, dropped = select(sources, includes, excludes)
+    flags = instrument_flags(includes, excludes, funcs, sources)
+
+    if args.format == "make":
+        print(f"CFLAGS_INSTRUMENT = $(CFLAGS_SYMBOLS) {flags}")
+    else:
+        print(flags)
 
     if args.print:
         print(f"config:    {args.config}", file=sys.stderr)

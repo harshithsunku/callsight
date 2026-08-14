@@ -1,0 +1,21 @@
+[project]
+name = "tracekit"
+version = "0.1.0"
+description = "Compile-time function tracing for C/C++ projects: selective -finstrument-functions coverage from one config file, zero source edits."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = []
+
+[project.scripts]
+tracekit = "tracekit.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Hatchling ships everything under the package dir, including the non-Python
+# payload (runtime C sources, Make/CMake integrations) that `tracekit init`
+# copies into target projects.
+[tool.hatch.build.targets.wheel]
+packages = ["src/tracekit"]
