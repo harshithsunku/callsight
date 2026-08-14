@@ -72,6 +72,11 @@ jobs:
             --exe bin/matrixlab.instr | tee analyze.out
           grep -q "unmatched_exits=0" analyze.out
           grep -qE "events=[1-9]" analyze.out
+      - name: Stop background stream processes and clean shm
+        if: always()
+        run: |
+          pkill -f "callsight serve" || true
+          pkill -f trace_stream || true
           rm -f /dev/shm/tk_ci
 
   build:
