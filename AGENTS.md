@@ -14,8 +14,16 @@ Layout:
 - `src/tracekit/ui/` — optional web UI (FastAPI + single-page frontend in
   `static/`); third-party deps live in the `ui` extra, imported only by
   `tracekit ui`.
-- `src/tracekit/runtime/` — `trace.c` / `trace.h`: the hook runtime.
-  Self-contained; must stay free of project-specific dependencies.
+- `src/tracekit/runtime/` — `trace.c` / `trace.h` / `trace_shm.h`: the hook
+  runtime and shared-memory ring protocol. Self-contained; must stay free
+  of project-specific dependencies.
+- `src/tracekit/stream/` — `trace_stream.c` (on-device streaming client)
+  plus vendored single-file zstd v1.5.7 (`zstd.c` / `zstd.h` /
+  `zstd_errors.h`, BSD — `zstd.LICENSE`). Regenerate from the official
+  repo's `build/single_file_libs/create_single_file_library.sh` if zstd
+  ever needs an upgrade.
+- `src/tracekit/serve.py` — TCP server for remote streams (`tracekit
+  serve`); zstandard dep lives in the `stream` extra.
 - `src/tracekit/share/Makefile.tracekit`, `src/tracekit/cmake/TraceKit.cmake`
   — build-system integrations (copied into adopted projects by
   `tracekit init`).
@@ -50,6 +58,17 @@ uvx cmake -DTRACEKIT_INSTRUMENT=ON \
 uvx cmake --build build-instr
 TRACE_ENABLE=1 TRACE_MAX=200000 ./build-instr/demo
 uv run tracekit analyze traces/ --exe build-instr/demo
+
+# end-to-end smoke test (remote streaming):
+uv run --extra stream tracekit serve --port 9001 --out /tmp/stream_traces &
+gcc -O2 -I src/tracekit/runtime -o /tmp/trace_stream \
+    src/tracekit/stream/trace_stream.c src/tracekit/stream/zstd.c
+/tmp/trace_stream /tk_smoke 127.0.0.1 9001 &
+cd tests/matrixlab
+TRACE_ENABLE=1 TRACE_SHM=/tk_smoke TRACE_MAX=500000 timeout 5 ./bin/matrixlab.instr
+# client exits after drain; then:
+uv run tracekit analyze /tmp/stream_traces --exe bin/matrixlab.instr
+rm -f /dev/shm/tk_smoke
 ```
 
 There is no pytest suite; `unittest` plus the end-to-end runs above are the
@@ -61,9 +80,16 @@ hotspots (cmake_demo must show only `fib` — `mix` is excluded).
 - C: C11, `-Wall -Wextra -pedantic`; match the existing comment style
   (short `/* ... */` above each function).
 - Python: stdlib only in the core package (`cli.py`, `flags.py`,
-  `analyze.py`). Third-party deps are allowed only under
-  `src/tracekit/ui/` and the `ui` optional extra — the core must import
-  cleanly without them.
+  `analyze.py`). Third-party deps are allowed only in the optional extras —
+  `ui` (FastAPI/uvicorn, under `src/tracekit/ui/`) and `stream`
+  (zstandard, `src/tracekit/serve.py`) — the core must import cleanly
+  without them.
+- Streaming mode (`TRACE_SHM`) must never stall the workload: when the
+  shared-memory ring is full, drop events and count them in the ring
+  header. No disk or network I/O in the traced process.
+- The wire protocol and ring layout live only in
+  `src/tracekit/runtime/trace_shm.h`; bump `TRACE_SHM_VERSION` /
+  `TRACE_STREAM_VERSION` on any layout change.
 - The instrumentation runtime (`src/tracekit/runtime/trace.c`) must never
   be compiled with `-finstrument-functions`; every function there carries
   `__attribute__((no_instrument_function))`, and both build integrations

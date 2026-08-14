@@ -34,6 +34,6 @@ TRACE_OBJ = $(BUILDDIR)/tracekit_runtime/trace.o
 
 # Instrumentation runtime: compiled WITHOUT -finstrument-functions (via
 # CFLAGS_SYMBOLS, not CFLAGS_INSTRUMENT) so the hooks cannot recurse.
-$(TRACE_OBJ): $(TRACEKIT_DIR)/trace.c $(TRACEKIT_DIR)/trace.h | $(BUILDDIR)
+$(TRACE_OBJ): $(TRACEKIT_DIR)/trace.c $(TRACEKIT_DIR)/trace.h $(TRACEKIT_DIR)/trace_shm.h | $(BUILDDIR)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS_SYMBOLS) -c -o $@ $<

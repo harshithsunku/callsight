@@ -15,9 +15,14 @@
  *   TRACE_ENABLE=1     enable trace collection (default: off)
  *   TRACE_DIR=dir      output directory (default: ./traces)
  *   TRACE_MAX=N        stop after N events globally (default: 0 = unlimited)
+ *   TRACE_SHM=/name    stream events to a shared-memory ring instead of
+ *                      files (drained by a trace_stream client; see
+ *                      trace_shm.h). Falls back to files if unavailable.
+ *   TRACE_SHM_SIZE=N   ring capacity in bytes (default: 16 MiB)
  *
  * Output: one binary file per thread, <dir>/trace.<pid>.<tid>.bin, resolved
- * offline with trace_analyze.py.
+ * offline with trace_analyze.py. In streaming mode the server side writes
+ * equivalent trace.stream.*.bin files.
  */
 
 #include <stdint.h>

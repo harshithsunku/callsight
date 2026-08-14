@@ -86,7 +86,39 @@ millions of events per second. Levers, cheapest first:
 `tracekit scan <dir> --config trace.config` previews what a config selects.
 
 Runtime knobs: `TRACE_ENABLE` (default off), `TRACE_DIR` (default
-`./traces`), `TRACE_MAX` (global event cap — always set one for long runs).
+`./traces`), `TRACE_MAX` (global event cap — always set one for long runs),
+`TRACE_SHM` / `TRACE_SHM_SIZE` (streaming mode, see above).
+
+## Remote streaming (devices, embedded)
+
+On a constrained device you can't accumulate trace files — a busy program
+generates millions of events per second. Streaming mode keeps nothing on
+the device: the runtime flushes into a shared-memory ring, and a tiny
+on-device client forwards events ZSTD-compressed over raw TCP.
+
+```sh
+# analysis host (powerful machine):
+tracekit serve --port 9001 --out traces/     # needs tracekit[stream]
+
+# adopt with streaming support:
+tracekit init --stream /path/to/project      # adds trace_stream.c + zstd.c
+
+# on the device:
+cc -O2 -o tracekit/trace_stream tracekit/trace_stream.c tracekit/zstd.c
+./tracekit/trace_stream /tracekit0 <server-ip> 9001 &
+TRACE_ENABLE=1 TRACE_SHM=/tracekit0 ./yourapp.instr
+```
+
+- The traced process does **no disk or network I/O** — only a shared-memory
+  memcpy per buffered batch.
+- If the ring fills faster than the client drains (network slow, ring too
+  small), events are **dropped and counted**, never blocking the workload;
+  the server reports the drop count. Size the ring with `TRACE_SHM_SIZE`.
+- The server writes standard `trace.stream.*.bin` files — `tracekit
+  analyze` and the web UI consume them unchanged.
+- The client is self-contained C built against the vendored single-file
+  zstd v1.5.7 (`src/tracekit/stream/zstd.c`, generated from the official
+  repo's `build/single_file_libs`; BSD license in `zstd.LICENSE`).
 
 ## CLI reference
 
@@ -97,14 +129,18 @@ Runtime knobs: `TRACE_ENABLE` (default off), `TRACE_DIR` (default
 | `tracekit flags --config c -- srcs...` | print compiler flags (build integrations use this) |
 | `tracekit analyze [traces/] [--exe bin] [--top N]` | hotspot report |
 | `tracekit ui [--host H] [--port P]` | web UI (needs `tracekit[ui]`) |
+| `tracekit serve [--host H] [--port P] [--out dir]` | TCP server for remote streams (needs `tracekit[stream]`) |
 
 ## Repo layout
 
 - `src/tracekit/` — the tool: `cli.py`, `flags.py` (config → compiler
   flags), `analyze.py` (offline analyzer); stdlib-only. `src/tracekit/ui/`
   is the optional web UI (FastAPI, only imported by `tracekit ui`).
-- `src/tracekit/runtime/` — `trace.c`/`trace.h`, the hook runtime copied
-  into adopted projects. Self-contained C, no deps beyond pthreads.
+- `src/tracekit/runtime/` — `trace.c`/`trace.h`/`trace_shm.h`, the hook
+  runtime copied into adopted projects. Self-contained C, no deps beyond
+  pthreads.
+- `src/tracekit/stream/` — `trace_stream.c` on-device streaming client +
+  vendored single-file zstd v1.5.7 (`zstd.c`, BSD — see `zstd.LICENSE`).
 - `src/tracekit/share/Makefile.tracekit`, `src/tracekit/cmake/TraceKit.cmake`
   — build-system integrations.
 - `tests/matrixlab/` — multi-threaded C11 demo workload; doubles as the
@@ -127,6 +163,7 @@ Runtime knobs: `TRACE_ENABLE` (default off), `TRACE_DIR` (default
 - **Phase 2 — web UI**: done (`tracekit ui`, optional `tracekit[ui]` extra).
   Next: richer report views (call graphs, flame graphs), live build-log
   streaming.
-- **Phase 3 — remote streaming**: sink abstraction in the runtime; an
-  on-device client streams ZSTD-compressed events over raw TCP to an
-  analysis server; runtime on/off via `-fpatchable-function-entry`.
+- **Phase 3 — remote streaming**: done (`TRACE_SHM` ring → `trace_stream`
+  client → ZSTD/TCP → `tracekit serve`). Next: runtime on/off via
+  `-fpatchable-function-entry` (see docs/instrumentation-options.md), live
+  stream view in the web UI.

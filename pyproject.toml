@@ -9,6 +9,7 @@ dependencies = []
 
 [project.optional-dependencies]
 ui = ["fastapi>=0.110", "uvicorn>=0.29"]
+stream = ["zstandard>=0.22"]
 
 [project.scripts]
 tracekit = "tracekit.cli:main"

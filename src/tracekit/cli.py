@@ -24,6 +24,7 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 RUNTIME_DIR = PACKAGE_DIR / "runtime"
 SHARE_DIR = PACKAGE_DIR / "share"
 CMAKE_DIR = PACKAGE_DIR / "cmake"
+STREAM_DIR = PACKAGE_DIR / "stream"
 
 CONFIG_TEMPLATE = """\
 # trace.config — selective instrumentation configuration.
@@ -92,8 +93,12 @@ def cmd_init(args):
 
     dest = project / "tracekit"
     dest.mkdir(exist_ok=True)
-    for f in ("trace.c", "trace.h"):
+    for f in ("trace.c", "trace.h", "trace_shm.h"):
         shutil.copy2(RUNTIME_DIR / f, dest / f)
+    if args.stream:
+        for f in ("trace_stream.c", "zstd.c", "zstd.h", "zstd_errors.h",
+                  "zstd.LICENSE"):
+            shutil.copy2(STREAM_DIR / f, dest / f)
     if build == "make":
         shutil.copy2(SHARE_DIR / "Makefile.tracekit", dest / "Makefile.tracekit")
     else:
@@ -111,6 +116,11 @@ def cmd_init(args):
           f"({n_sources} sources found under {project})")
     print()
     print(CMAKE_WIRING if build == "cmake" else MAKE_WIRING)
+    if args.stream:
+        print()
+        print("Streaming client (build on the device):")
+        print("    cc -O2 -o tracekit/trace_stream tracekit/trace_stream.c "
+              "tracekit/zstd.c")
     print()
     print("Then: build, run with TRACE_ENABLE=1, and 'tracekit analyze traces/'.")
 
@@ -137,6 +147,16 @@ def cmd_ui(args):
     uvicorn.run(app, host=args.host, port=args.port)
 
 
+def cmd_serve(args):
+    try:
+        import zstandard  # noqa: F401
+    except ImportError:
+        sys.exit("the streaming server needs the optional dependencies — "
+                 "install with: uv tool install 'tracekit[stream]'")
+    from tracekit.serve import serve
+    serve(args.host, args.port, args.out)
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
 
@@ -158,6 +178,9 @@ def main(argv=None):
     p_init.add_argument("project", help="project root directory")
     p_init.add_argument("--build", choices=("make", "cmake"), default=None,
                         help="build system (default: auto-detect)")
+    p_init.add_argument("--stream", action="store_true",
+                        help="also copy the remote-streaming client "
+                             "(trace_stream.c + vendored single-file zstd)")
     p_init.set_defaults(func=cmd_init)
 
     p_scan = sub.add_parser("scan", help="show instrumentation selection")
@@ -169,6 +192,14 @@ def main(argv=None):
     p_ui.add_argument("--host", default="127.0.0.1")
     p_ui.add_argument("--port", type=int, default=8321)
     p_ui.set_defaults(func=cmd_ui)
+
+    p_serve = sub.add_parser("serve", help="TCP server for remote trace "
+                                           "streams (needs tracekit[stream])")
+    p_serve.add_argument("--host", default="0.0.0.0")
+    p_serve.add_argument("--port", type=int, default=9001)
+    p_serve.add_argument("--out", default="traces",
+                         help="output directory for trace.stream.*.bin")
+    p_serve.set_defaults(func=cmd_serve)
 
     sub.add_parser("flags", help="print compiler flags "
                                  "(build-system integration)")

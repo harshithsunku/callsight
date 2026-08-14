@@ -13,9 +13,18 @@
  *  - Hooks stay inert (one predictable branch) unless TRACE_ENABLE=1.
  *  - No project dependencies: this file is meant to be dropped into any
  *    C/C++ codebase as-is.
+ *
+ * Streaming mode (TRACE_SHM=/name): flushes go to a POSIX shared-memory
+ * ring (see trace_shm.h) instead of files, so a traced device accumulates
+ * nothing on disk. A separate trace_stream client drains the ring and
+ * forwards events over TCP. If the ring fills faster than the client
+ * drains, events are DROPPED (counted in the ring header) — profiling must
+ * never stall the workload. If the shm segment cannot be attached, the
+ * runtime warns and falls back to file mode.
  */
 
 #include "trace.h"
+#include "trace_shm.h"
 
 #include <pthread.h>
 #include <stdatomic.h>
@@ -41,6 +50,7 @@ static char            g_trace_dir[512] = "traces";
 static uint64_t        g_trace_max = 0;      /* 0 = unlimited */
 static atomic_uint_fast64_t g_trace_count = 0;
 static int             g_trace_stopped = 0;  /* set once cap is reached */
+static trace_shm_header_t *g_shm = NULL;     /* non-NULL: streaming mode */
 
 /* --- Per-thread state --- */
 
@@ -64,8 +74,31 @@ NOINSTR static uint64_t trace_now_ns(void) {
 
 /* --- Flush --- */
 
+/* Streaming flush: copy the thread's batch into the shm ring. Events that
+ * don't fit are dropped and counted — see the file header comment. */
+NOINSTR static void trace_shm_flush(trace_tls_t *tls) {
+    trace_shm_header_t *h = g_shm;
+    uint64_t bytes = (uint64_t)tls->len * sizeof(trace_event_t);
+    trace_shm_lock(h);
+    uint64_t avail = h->capacity - (h->head - h->tail);
+    if (bytes <= avail) {
+        h->head = trace_shm_put(h, tls->buf, bytes);
+    } else {
+        uint64_t fits = avail / sizeof(trace_event_t);
+        if (fits > 0)
+            h->head = trace_shm_put(h, tls->buf,
+                                    fits * sizeof(trace_event_t));
+        h->dropped += tls->len - fits;
+    }
+    trace_shm_unlock(h);
+    tls->len = 0;
+}
+
 NOINSTR static void trace_tls_flush(trace_tls_t *tls) {
-    if (tls->out && tls->len > 0) {
+    if (tls->len == 0) return;
+    if (g_shm) {
+        trace_shm_flush(tls);
+    } else if (tls->out) {
         fwrite(tls->buf, sizeof(trace_event_t), tls->len, tls->out);
         tls->len = 0;
     }
@@ -84,9 +117,10 @@ NOINSTR static void trace_tls_destroy(void *ptr) {
     free(tls);
 }
 
-/* atexit handler: make sure the main thread's buffer is flushed */
+/* atexit handler: flush the main thread's buffer, detach from the ring */
 NOINSTR static void trace_atexit(void) {
     if (tl_trace) trace_tls_flush(tl_trace);
+    if (g_shm) __sync_fetch_and_sub(&g_shm->writers, 1);
 }
 
 /* --- One-time global init --- */
@@ -107,7 +141,25 @@ NOINSTR static void trace_global_init(void) {
 
     if (!g_trace_enabled) return;
 
-    mkdir(g_trace_dir, 0755); /* ignore EEXIST */
+    env = getenv("TRACE_SHM");
+    if (env && env[0] != '\0') {
+        uint32_t size = TRACE_SHM_DEF_SIZE;
+        const char *sz = getenv("TRACE_SHM_SIZE");
+        if (sz) {
+            uint64_t v = strtoull(sz, NULL, 10);
+            if (v >= 4096 && v <= UINT32_MAX) size = (uint32_t)v;
+        }
+        g_shm = trace_shm_attach(env, size);
+        if (g_shm) {
+            __sync_fetch_and_add(&g_shm->writers, 1);
+        } else {
+            fprintf(stderr, "tracekit: cannot attach shm %s, "
+                            "falling back to trace files\n", env);
+        }
+    }
+
+    if (!g_shm)
+        mkdir(g_trace_dir, 0755); /* ignore EEXIST */
     pthread_key_create(&g_trace_key, trace_tls_destroy);
     atexit(trace_atexit);
 }
@@ -122,6 +174,13 @@ NOINSTR static trace_tls_t *trace_tls_get(void) {
     if (!tls) return NULL;
 
     tls->tid = (uint32_t)syscall(SYS_gettid);
+
+    if (g_shm) {
+        /* streaming mode: no per-thread file, events go to the shm ring */
+        tl_trace = tls;
+        pthread_setspecific(g_trace_key, tls);
+        return tls;
+    }
 
     char path[600];
     snprintf(path, sizeof(path), "%s/trace.%d.%u.bin",
