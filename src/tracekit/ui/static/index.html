@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tracekit</title>
+<style>
+  :root { --bg:#0f1419; --panel:#1a2129; --border:#2c3644; --fg:#d5dde6;
+          --dim:#8494a5; --accent:#4da3ff; --ok:#4caf7d; --err:#e05c5c; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { padding:14px 24px; border-bottom:1px solid var(--border);
+           display:flex; align-items:baseline; gap:12px; }
+  header h1 { font-size:18px; margin:0; color:var(--accent); }
+  header span { color:var(--dim); font-size:12px; }
+  main { max-width:1100px; margin:0 auto; padding:20px 24px; }
+  section { background:var(--panel); border:1px solid var(--border);
+            border-radius:8px; padding:16px 20px; margin-bottom:16px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em;
+       color:var(--dim); margin:0 0 12px; }
+  input[type=text], input[type=number], textarea {
+       background:var(--bg); color:var(--fg); border:1px solid var(--border);
+       border-radius:5px; padding:7px 10px; font:13px ui-monospace, monospace; }
+  input[type=text] { width:420px; }
+  textarea { width:100%; height:220px; resize:vertical; }
+  button { background:var(--accent); color:#08111d; border:0; border-radius:5px;
+           padding:7px 14px; font-weight:600; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--accent);
+                 border:1px solid var(--accent); }
+  button:disabled { opacity:.4; cursor:default; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .dim { color:var(--dim); }
+  .ok { color:var(--ok); } .err { color:var(--err); }
+  pre { background:var(--bg); border:1px solid var(--border); border-radius:5px;
+        padding:10px; overflow:auto; max-height:280px;
+        font:12px/1.4 ui-monospace, monospace; white-space:pre-wrap; }
+  table { border-collapse:collapse; width:100%;
+          font:12.5px ui-monospace, monospace; }
+  th, td { text-align:right; padding:4px 10px;
+           border-bottom:1px solid var(--border); }
+  th { color:var(--dim); cursor:pointer; user-select:none; }
+  th.sel { color:var(--accent); }
+  td.l, th.l { text-align:left; }
+  .browse { margin-top:10px; }
+  .browse a { color:var(--accent); cursor:pointer; text-decoration:none;
+              display:inline-block; padding:2px 6px; border-radius:4px; }
+  .browse a:hover { background:var(--border); }
+  .badge { font-size:11px; color:var(--dim); border:1px solid var(--border);
+           border-radius:4px; padding:1px 6px; margin-left:6px; }
+  #status { min-height:20px; margin:8px 0; }
+</style>
+</head>
+<body>
+<header><h1>tracekit</h1><span>compile-time function tracing for C/C++</span></header>
+<main>
+
+<section>
+  <h2>1 · Project</h2>
+  <div class="row">
+    <input type="text" id="path" placeholder="/path/to/project" autofocus>
+    <button onclick="loadProject()">Open</button>
+    <button class="ghost" onclick="browse(curPath())">Browse</button>
+  </div>
+  <div id="browse" class="browse"></div>
+  <div id="projinfo" class="dim" style="margin-top:8px"></div>
+</section>
+
+<section>
+  <h2>2 · trace.config</h2>
+  <textarea id="config" spellcheck="false"></textarea>
+  <div class="row" style="margin-top:10px">
+    <button onclick="saveConfig()">Save</button>
+    <button class="ghost" onclick="scan()">Preview selection</button>
+    <span id="scanresult" class="dim"></span>
+  </div>
+</section>
+
+<section>
+  <h2>3 · Build &amp; run</h2>
+  <div class="row">
+    <button onclick="build()">Build instrumented</button>
+    <button class="ghost" onclick="runTarget()">Run + trace</button>
+    <label class="dim">binary <input type="text" id="binary" style="width:220px" placeholder="bin/app.instr"></label>
+    <label class="dim">TRACE_MAX <input type="number" id="trace_max" value="1000000" style="width:90px"></label>
+    <label class="dim">timeout s <input type="number" id="timeout" value="30" style="width:60px"></label>
+  </div>
+  <div id="status"></div>
+  <pre id="log" style="display:none"></pre>
+</section>
+
+<section>
+  <h2>4 · Report</h2>
+  <div class="row">
+    <button onclick="analyzeReport()">Analyze traces</button>
+    <span id="summary" class="dim"></span>
+  </div>
+  <div id="report"></div>
+</section>
+
+</main>
+<script>
+let project = "";
+
+function curPath() { return document.getElementById("path").value || "/"; }
+function setStatus(msg, cls) {
+  const el = document.getElementById("status");
+  el.textContent = msg; el.className = cls || "dim";
+}
+async function api(url, opts) {
+  const r = await fetch(url, opts);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.detail || r.statusText);
+  return body;
+}
+function showLog(text) {
+  const el = document.getElementById("log");
+  el.style.display = text ? "block" : "none";
+  el.textContent = text;
+}
+
+async function browse(path) {
+  try {
+    const d = await api("/api/browse?path=" + encodeURIComponent(path));
+    document.getElementById("path").value = d.path;
+    const div = document.getElementById("browse");
+    let html = `<a onclick="browse('${d.parent}')">.. (up)</a> `;
+    for (const e of d.entries) {
+      const badges = (e.has_makefile ? '<span class="badge">make</span>' : "")
+                   + (e.has_cmake ? '<span class="badge">cmake</span>' : "");
+      html += `<a onclick="browse('${d.path}/${e.name}')">${e.name}/</a>${badges} `;
+    }
+    div.innerHTML = html;
+  } catch (e) { setStatus(e.message, "err"); }
+}
+
+async function loadProject() {
+  project = curPath();
+  try {
+    const d = await api("/api/project?path=" + encodeURIComponent(project));
+    document.getElementById("projinfo").textContent =
+      `${d.sources} sources · build: ${d.build}` +
+      (d.has_tracekit_dir ? " · tracekit runtime present" : " · run `tracekit init` there first") +
+      (d.binaries.length ? ` · binaries: ${d.binaries.join(", ")}` : "");
+    if (d.binaries.length) document.getElementById("binary").value = d.binaries[0];
+    const c = await api("/api/config?path=" + encodeURIComponent(project));
+    document.getElementById("config").value = c.content;
+    setStatus("project loaded", "ok");
+  } catch (e) { setStatus(e.message, "err"); }
+}
+
+async function saveConfig() {
+  try {
+    await api("/api/config", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({path: project,
+                            content: document.getElementById("config").value})});
+    setStatus("trace.config saved", "ok");
+  } catch (e) { setStatus(e.message, "err"); }
+}
+
+async function scan() {
+  try {
+    const d = await api("/api/scan?path=" + encodeURIComponent(project));
+    document.getElementById("scanresult").textContent =
+      `${d.total} sources: ${d.instrumented} instrumented, ${d.excluded.length} excluded` +
+      (d.excluded.length ? ` (${d.excluded.slice(0,5).join(", ")}${d.excluded.length>5?", …":""})` : "");
+  } catch (e) { setStatus(e.message, "err"); }
+}
+
+async function build() {
+  setStatus("building…", "dim"); showLog("");
+  try {
+    const d = await api("/api/build", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({path: project})});
+    showLog(d.log);
+    setStatus(d.ok ? "build OK" + (d.binaries.length ? `: ${d.binaries.join(", ")}` : "")
+                   : "build FAILED", d.ok ? "ok" : "err");
+    if (d.binaries.length) document.getElementById("binary").value = d.binaries[0];
+  } catch (e) { setStatus(e.message, "err"); }
+}
+
+async function runTarget() {
+  const binary = document.getElementById("binary").value;
+  if (!binary) { setStatus("no binary selected — build first", "err"); return; }
+  setStatus("running with TRACE_ENABLE=1 …", "dim");
+  try {
+    const d = await api("/api/run", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({path: project, binary: binary,
+        trace_max: +document.getElementById("trace_max").value,
+        timeout: +document.getElementById("timeout").value})});
+    showLog(d.output);
+    setStatus(`run finished · ${d.trace_files} trace files`, "ok");
+  } catch (e) { setStatus(e.message, "err"); }
+}
+
+let rows = [], sortKey = "self_ms";
+function renderTable() {
+  const cols = [["calls","calls"],["incl_ms","incl ms"],["self_ms","self ms"],
+                ["max_ms","max ms"]];
+  let html = "<table><tr>" + cols.map(([k,label]) =>
+      `<th class="${sortKey===k?"sel":""}" onclick="sortKey='${k}';renderTable()">${label}</th>`).join("")
+      + '<th class="l">function</th></tr>';
+  for (const r of [...rows].sort((a,b) => b[sortKey]-a[sortKey]).slice(0, 50)) {
+    html += `<tr><td>${r.calls}</td><td>${r.incl_ms.toFixed(3)}</td>` +
+            `<td>${r.self_ms.toFixed(3)}</td><td>${r.max_ms.toFixed(3)}</td>` +
+            `<td class="l">${r.function} <span class="dim">${r.location}</span></td></tr>`;
+  }
+  html += "</table>";
+  document.getElementById("report").innerHTML = html;
+}
+
+async function analyzeReport() {
+  const binary = document.getElementById("binary").value;
+  try {
+    const d = await api("/api/analyze?path=" + encodeURIComponent(project)
+                        + "&binary=" + encodeURIComponent(binary));
+    rows = d.rows;
+    document.getElementById("summary").textContent =
+      `events=${d.events} threads=${d.threads} functions=${d.functions} ` +
+      `span=${d.span_ms.toFixed(1)}ms unmatched_exits=${d.unmatched_exits} ` +
+      `unclosed_enters=${d.unclosed_enters}`;
+    renderTable();
+    setStatus(d.unmatched_exits === 0 ? "clean trace" : "trace has unmatched exits",
+              d.unmatched_exits === 0 ? "ok" : "err");
+  } catch (e) { setStatus(e.message, "err"); }
+}
+</script>
+</body>
+</html>

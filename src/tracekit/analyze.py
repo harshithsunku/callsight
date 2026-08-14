@@ -106,10 +106,6 @@ def analyze(events):
     return stats, threads, unmatched_exits, open_frames
 
 
-def fmt_ms(ns):
-    return f"{ns / 1e6:12.3f}"
-
-
 def find_exe(arg):
     if arg:
         return arg
@@ -121,52 +117,73 @@ def find_exe(arg):
                 else f"multiple *.instr binaries found: {', '.join(map(str, candidates))}"))
 
 
-def report(tracedir, exe, top):
-    """Analyze all trace files in tracedir and print the hotspot report.
+def collect(tracedir, exe):
+    """Analyze all trace files in tracedir; return structured report data.
 
-    Returns the unmatched_exits count (0 means a clean trace)."""
-    exe = find_exe(exe)
-
+    Dict with summary counters, a 'rows' list (one per function: calls,
+    incl/self/max ms, resolved name/location) and 'per_thread' timing."""
     files = sorted(Path(tracedir).glob("trace.*.bin"))
     if not files:
-        sys.exit(f"no trace files in {tracedir}")
+        raise RuntimeError(f"no trace files in {tracedir}")
 
     events = []
     for f in files:
         events.extend(read_events(f))
     if not events:
-        sys.exit("trace files contained no events")
+        raise RuntimeError("trace files contained no events")
 
     names = resolve({ev[2] for ev in events}, exe)
     stats, threads, unmatched, open_frames = analyze(events)
 
     span_ns = max(t[1] for t in threads.values()) - min(t[0] for t in threads.values())
-    print(f"events={len(events)} threads={len(threads)} "
-          f"functions={len(stats)} span={span_ns / 1e6:.1f}ms "
-          f"unmatched_exits={unmatched} unclosed_enters={open_frames}")
+    rows = []
+    for func, (calls, incl, self_t, max_t) in stats.items():
+        fn, loc = names.get(func, ("??", "??:0"))
+        rows.append({"function": fn, "location": loc, "calls": calls,
+                     "incl_ms": incl / 1e6, "self_ms": self_t / 1e6,
+                     "max_ms": max_t / 1e6})
+    per_tid = defaultdict(int)
+    for tid, *_ in events:
+        per_tid[tid] += 1
+    per_thread = [{"tid": tid, "events": per_tid[tid],
+                   "span_ms": (threads[tid][1] - threads[tid][0]) / 1e6}
+                  for tid in sorted(per_tid)]
+    return {"events": len(events), "threads": len(threads),
+            "functions": len(stats), "span_ms": span_ns / 1e6,
+            "unmatched_exits": unmatched, "unclosed_enters": open_frames,
+            "rows": rows, "per_thread": per_thread}
+
+
+def report(tracedir, exe, top):
+    """Analyze all trace files in tracedir and print the hotspot report.
+
+    Returns the unmatched_exits count (0 means a clean trace)."""
+    exe = find_exe(exe)
+    data = collect(tracedir, exe)
+
+    print(f"events={data['events']} threads={data['threads']} "
+          f"functions={data['functions']} span={data['span_ms']:.1f}ms "
+          f"unmatched_exits={data['unmatched_exits']} "
+          f"unclosed_enters={data['unclosed_enters']}")
     print()
 
     hdr = f"{'calls':>10} {'incl_ms':>12} {'self_ms':>12} {'max_ms':>12}  function (first location)"
-    for label, key in (("TOP BY SELF TIME", 2), ("TOP BY INCLUSIVE TIME", 1)):
+    for label, key in (("TOP BY SELF TIME", "self_ms"),
+                       ("TOP BY INCLUSIVE TIME", "incl_ms")):
         print(f"== {label} ==")
         print(hdr)
-        top_rows = sorted(stats.items(), key=lambda kv: kv[1][key], reverse=True)[:top]
-        for func, (calls, incl, self_t, max_t) in top_rows:
-            fn, loc = names.get(func, ("??", "??:0"))
-            print(f"{calls:>10} {fmt_ms(incl)} {fmt_ms(self_t)} {fmt_ms(max_t)}  "
-                  f"{fn} ({loc})")
+        rows = sorted(data["rows"], key=lambda r: r[key], reverse=True)[:top]
+        for r in rows:
+            print(f"{r['calls']:>10} {r['incl_ms']:>12.3f} {r['self_ms']:>12.3f} "
+                  f"{r['max_ms']:>12.3f}  {r['function']} ({r['location']})")
         print()
 
     print("== PER-THREAD SUMMARY ==")
     print(f"{'tid':>8} {'events':>10} {'span_ms':>12}")
-    per_tid = defaultdict(int)
-    for tid, *_ in events:
-        per_tid[tid] += 1
-    for tid in sorted(per_tid):
-        t0, t1 = threads[tid]
-        print(f"{tid:>8} {per_tid[tid]:>10} {fmt_ms(t1 - t0)}")
+    for t in data["per_thread"]:
+        print(f"{t['tid']:>8} {t['events']:>10} {t['span_ms']:>12.3f}")
 
-    return unmatched
+    return data["unmatched_exits"]
 
 
 def main(argv=None):
@@ -179,7 +196,10 @@ def main(argv=None):
                          "(default: the single *.instr under ./bin or .)")
     ap.add_argument("--top", type=int, default=20, help="rows per table")
     args = ap.parse_args(argv)
-    report(args.tracedir, args.exe, args.top)
+    try:
+        report(args.tracedir, args.exe, args.top)
+    except RuntimeError as e:
+        sys.exit(str(e))
 
 
 if __name__ == "__main__":

@@ -9,11 +9,25 @@ Clang, C and C++, with GNU Make and CMake projects.
 ## Install
 
 ```sh
-uv tool install .        # from this repo; puts `tracekit` on your PATH
+uv tool install .          # from this repo; puts `tracekit` on your PATH
+uv tool install '.[ui]'    # same, plus the optional web UI
 ```
 
 (Requires [uv](https://docs.astral.sh/uv/). The tool itself is Python
 stdlib-only; the runtime it injects is dependency-free C.)
+
+## Web UI
+
+```sh
+tracekit ui                # serves http://127.0.0.1:8321
+```
+
+A local web app that walks the whole workflow against any project on the
+machine: browse for the project folder, edit its `trace.config`, preview
+the instrumentation selection, build the instrumented profile (Make or
+CMake — CMake is fetched ephemerally via `uvx` if not installed), run the
+binary with tracing enabled, and view the sortable hotspot report. No root
+needed; bind address defaults to localhost.
 
 ## Adopt it in your project (2 steps)
 
@@ -82,11 +96,13 @@ Runtime knobs: `TRACE_ENABLE` (default off), `TRACE_DIR` (default
 | `tracekit scan <dir> [--config c]` | preview instrumentation selection |
 | `tracekit flags --config c -- srcs...` | print compiler flags (build integrations use this) |
 | `tracekit analyze [traces/] [--exe bin] [--top N]` | hotspot report |
+| `tracekit ui [--host H] [--port P]` | web UI (needs `tracekit[ui]`) |
 
 ## Repo layout
 
 - `src/tracekit/` — the tool: `cli.py`, `flags.py` (config → compiler
-  flags), `analyze.py` (offline analyzer); stdlib-only.
+  flags), `analyze.py` (offline analyzer); stdlib-only. `src/tracekit/ui/`
+  is the optional web UI (FastAPI, only imported by `tracekit ui`).
 - `src/tracekit/runtime/` — `trace.c`/`trace.h`, the hook runtime copied
   into adopted projects. Self-contained C, no deps beyond pthreads.
 - `src/tracekit/share/Makefile.tracekit`, `src/tracekit/cmake/TraceKit.cmake`
@@ -108,9 +124,9 @@ Runtime knobs: `TRACE_ENABLE` (default off), `TRACE_DIR` (default
 
 ## Roadmap
 
-- **Phase 2 — web UI**: uv-run local web app (no root) for folder selection,
-  config editing, build triggering, and report viewing, as an optional
-  `tracekit[ui]` extra.
+- **Phase 2 — web UI**: done (`tracekit ui`, optional `tracekit[ui]` extra).
+  Next: richer report views (call graphs, flame graphs), live build-log
+  streaming.
 - **Phase 3 — remote streaming**: sink abstraction in the runtime; an
   on-device client streams ZSTD-compressed events over raw TCP to an
   analysis server; runtime on/off via `-fpatchable-function-entry`.

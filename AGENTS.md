@@ -9,8 +9,11 @@ with zero source edits, controlled by a single `trace.config`.
 
 Layout:
 
-- `src/tracekit/` — the Python package (stdlib-only): `cli.py` (init /
-  scan / flags / analyze), `flags.py`, `analyze.py`.
+- `src/tracekit/` — the Python package (stdlib-only core): `cli.py` (init /
+  scan / flags / analyze / ui), `flags.py`, `analyze.py`.
+- `src/tracekit/ui/` — optional web UI (FastAPI + single-page frontend in
+  `static/`); third-party deps live in the `ui` extra, imported only by
+  `tracekit ui`.
 - `src/tracekit/runtime/` — `trace.c` / `trace.h`: the hook runtime.
   Self-contained; must stay free of project-specific dependencies.
 - `src/tracekit/share/Makefile.tracekit`, `src/tracekit/cmake/TraceKit.cmake`
@@ -29,6 +32,8 @@ python3 -m unittest discover -s tests
 
 # CLI without installing:
 uv run tracekit --help
+# web UI (optional deps via the ui extra):
+uv run --extra ui tracekit ui          # http://127.0.0.1:8321
 # installed:
 uv tool install . && tracekit --help
 
@@ -55,8 +60,10 @@ hotspots (cmake_demo must show only `fib` — `mix` is excluded).
 
 - C: C11, `-Wall -Wextra -pedantic`; match the existing comment style
   (short `/* ... */` above each function).
-- Python: stdlib only — no third-party dependencies in the core package.
-  Future web-UI deps go in an optional `tracekit[ui]` extra.
+- Python: stdlib only in the core package (`cli.py`, `flags.py`,
+  `analyze.py`). Third-party deps are allowed only under
+  `src/tracekit/ui/` and the `ui` optional extra — the core must import
+  cleanly without them.
 - The instrumentation runtime (`src/tracekit/runtime/trace.c`) must never
   be compiled with `-finstrument-functions`; every function there carries
   `__attribute__((no_instrument_function))`, and both build integrations

@@ -95,10 +95,20 @@ def select(sources, includes, excludes):
     return selected, dropped
 
 
+# Directories never worth scanning for project sources.
+SKIP_DIRS = {".git", ".svn", ".hg", "node_modules", ".venv", "venv",
+             "__pycache__"}
+
+
 def scan_sources(directory):
-    """Recursively collect C/C++ sources under directory."""
+    """Recursively collect C/C++ sources under directory.
+
+    Skips VCS/dependency dirs and build output dirs (build, build-*)."""
     sources = []
-    for root, _dirs, files in os.walk(directory):
+    for root, dirs, files in os.walk(directory):
+        dirs[:] = [d for d in dirs
+                   if d not in SKIP_DIRS
+                   and d != "build" and not d.startswith("build-")]
         for f in files:
             if f.endswith(SOURCE_SUFFIXES):
                 sources.append(os.path.join(root, f))

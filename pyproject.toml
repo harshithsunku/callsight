@@ -7,6 +7,9 @@ requires-python = ">=3.9"
 license = { text = "MIT" }
 dependencies = []
 
+[project.optional-dependencies]
+ui = ["fastapi>=0.110", "uvicorn>=0.29"]
+
 [project.scripts]
 tracekit = "tracekit.cli:main"
 

@@ -127,6 +127,16 @@ def cmd_scan(args):
         print(f"  excluded: {s}")
 
 
+def cmd_ui(args):
+    try:
+        import uvicorn
+    except ImportError:
+        sys.exit("the web UI needs the optional dependencies — "
+                 "install with: uv tool install 'tracekit[ui]'")
+    from tracekit.ui.app import app
+    uvicorn.run(app, host=args.host, port=args.port)
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
 
@@ -154,6 +164,11 @@ def main(argv=None):
     p_scan.add_argument("directory", help="source tree to scan")
     p_scan.add_argument("--config", default="trace.config")
     p_scan.set_defaults(func=cmd_scan)
+
+    p_ui = sub.add_parser("ui", help="start the web UI (needs tracekit[ui])")
+    p_ui.add_argument("--host", default="127.0.0.1")
+    p_ui.add_argument("--port", type=int, default=8321)
+    p_ui.set_defaults(func=cmd_ui)
 
     sub.add_parser("flags", help="print compiler flags "
                                  "(build-system integration)")
