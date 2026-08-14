@@ -1,0 +1,52 @@
+site_name: callscope
+site_description: Compile-time function tracing for C/C++ — zero source edits, one config file, device-to-server streaming
+site_url: https://harshithsunku.github.io/callscope/
+repo_url: https://github.com/harshithsunku/callscope
+repo_name: harshithsunku/callscope
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: cyan
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: cyan
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+  features:
+    - navigation.instant
+    - navigation.sections
+    - content.code.copy
+    - content.action.view
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.superfences
+  - pymdownx.snippets:
+      base_path: ['.', 'docs']
+  - pymdownx.tabbed:
+      alternate_style: true
+
+extra_css:
+  - stylesheets/landing.css
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Configuration: configuration.md
+  - Build integrations: integrations.md
+  - Web UI: web-ui.md
+  - Remote streaming: streaming.md
+  - Compiler mechanisms: instrumentation-options.md
+  - Status & roadmap: status.md

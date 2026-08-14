@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Offline analyzer for compile-time traces produced by the tracekit runtime.
+Offline analyzer for compile-time traces produced by the callscope runtime.
 
 Reads the binary trace files written by trace.c, resolves function addresses
 with addr2line (static functions included), matches enter/exit events per
 thread, and reports per-function call counts and inclusive/self times.
 
 Usage:
-    tracekit analyze [traces/] [--exe path/to/binary] [--top 20]
+    callscope analyze [traces/] [--exe path/to/binary] [--top 20]
 
 If --exe is omitted, a single `*.instr` binary is looked up under ./bin and .
 Build instrumented binaries with -no-pie (the Make/CMake integrations do

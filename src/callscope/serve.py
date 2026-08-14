@@ -1,13 +1,13 @@
-"""TCP server for tracekit remote tracing.
+"""TCP server for callscope remote tracing.
 
 Receives ZSTD-compressed event streams from on-device trace_stream clients
 (see runtime/trace_shm.h for the wire protocol), decompresses them, and
-writes standard trace.<...>.bin files that `tracekit analyze` and the web
+writes standard trace.<...>.bin files that `callscope analyze` and the web
 UI consume unchanged.
 
-Requires the optional 'stream' extra: uv tool install 'tracekit[stream]'.
+Requires the optional 'stream' extra: uv tool install 'callscope[stream]'.
 
-Usage: tracekit serve [--host 0.0.0.0] [--port 9001] [--out traces/]
+Usage: callscope serve [--host 0.0.0.0] [--port 9001] [--out traces/]
 """
 
 import socket
@@ -16,7 +16,7 @@ import sys
 import threading
 from pathlib import Path
 
-from tracekit import analyze
+from callscope import analyze
 
 MAGIC = b"TKSTREAM"
 VERSION = 1
@@ -90,7 +90,7 @@ def serve(host, port, outdir):
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((host, port))
     sock.listen(8)
-    print(f"tracekit serve: listening on {host}:{port}, "
+    print(f"callscope serve: listening on {host}:{port}, "
           f"writing {outdir}/trace.stream.*.bin")
     conn_id = 0
     try:
@@ -101,6 +101,6 @@ def serve(host, port, outdir):
                              args=(conn, addr, outdir, dctx, conn_id),
                              daemon=True).start()
     except KeyboardInterrupt:
-        print("\ntracekit serve: stopped")
+        print("\ncallscope serve: stopped")
     finally:
         sock.close()

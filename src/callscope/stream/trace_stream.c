@@ -1,18 +1,18 @@
 /*
- * trace_stream — on-device streaming client for tracekit remote tracing.
+ * trace_stream — on-device streaming client for callscope remote tracing.
  *
  * Maps the shared-memory ring a traced process writes to (trace.c with
  * TRACE_SHM=/name), drains it in batches, ZSTD-compresses each batch and
- * sends it over raw TCP to a `tracekit serve` listener. Self-contained:
+ * sends it over raw TCP to a `callscope serve` listener. Self-contained:
  * build with the vendored single-file zstd:
  *
  *     cc -O2 -o trace_stream trace_stream.c zstd.c
  *
- * (`tracekit init --stream` copies all needed files flat into the target
- * project's tracekit/ dir; add -lrt on older glibc for shm_open.)
+ * (`callscope init --stream` copies all needed files flat into the target
+ * project's callscope/ dir; add -lrt on older glibc for shm_open.)
  *
  * Usage: trace_stream <shm-name> <server-host> <port>
- *   e.g. trace_stream /tracekit0 192.168.1.10 9001
+ *   e.g. trace_stream /callscope0 192.168.1.10 9001
  *
  * Exits once a tracer attached and detached (writers 1 -> 0) and the ring
  * is fully drained. If no tracer ever attaches, it waits — Ctrl-C to stop.
@@ -28,7 +28,7 @@
 #include <unistd.h>
 
 #include "zstd.h"
-#include "trace.h"       /* trace_event_t (copied flat by `tracekit init`) */
+#include "trace.h"       /* trace_event_t (copied flat by `callscope init`) */
 #include "trace_shm.h"
 
 /* Drain batch size: big enough to amortize syscalls, small enough to keep

@@ -1,9 +1,9 @@
-# Makefile.tracekit — add compile-time function tracing to a GNU Make project.
+# Makefile.callscope — add compile-time function tracing to a GNU Make project.
 #
 # Usage in your Makefile (after SRCS is defined):
 #
-#     TRACEKIT_DIR ?= tracekit
-#     include $(TRACEKIT_DIR)/Makefile.tracekit
+#     CALLSCOPE_DIR ?= callscope
+#     include $(CALLSCOPE_DIR)/Makefile.callscope
 #
 #     instrument: CFLAGS = $(CFLAGS_INSTRUMENT)
 #     instrument: $(BINDIR)/$(TARGET).instr
@@ -15,25 +15,25 @@
 #   CC, BUILDDIR    compiler and object directory
 #   CFLAGS_SYMBOLS  your normal flags with -g (base for CFLAGS_INSTRUMENT)
 # Overridable:
-#   TRACEKIT_DIR     where trace.c/trace.h live          (default: tracekit)
-#   TRACEKIT_CONFIG  selection config                    (default: ./trace.config)
-#   TRACEKIT         command that prints the flags       (default: tracekit)
+#   CALLSCOPE_DIR     where trace.c/trace.h live          (default: callscope)
+#   CALLSCOPE_CONFIG  selection config                    (default: ./trace.config)
+#   CALLSCOPE         command that prints the flags       (default: callscope)
 #
 # -no-pie is required at link time: it keeps runtime addresses equal to link
-# addresses so `tracekit analyze` can feed them to addr2line directly.
+# addresses so `callscope analyze` can feed them to addr2line directly.
 
-TRACEKIT_DIR     ?= tracekit
-TRACEKIT_CONFIG  ?= trace.config
-TRACEKIT         ?= tracekit
+CALLSCOPE_DIR     ?= callscope
+CALLSCOPE_CONFIG  ?= trace.config
+CALLSCOPE         ?= callscope
 
 # CFLAGS_INSTRUMENT = your CFLAGS_SYMBOLS + -finstrument-functions + the
-# exclude lists derived from TRACEKIT_CONFIG and SRCS.
-$(eval $(shell $(TRACEKIT) flags --config $(TRACEKIT_CONFIG) -- $(SRCS) 2>/dev/null))
+# exclude lists derived from CALLSCOPE_CONFIG and SRCS.
+$(eval $(shell $(CALLSCOPE) flags --config $(CALLSCOPE_CONFIG) -- $(SRCS) 2>/dev/null))
 
-TRACE_OBJ = $(BUILDDIR)/tracekit_runtime/trace.o
+TRACE_OBJ = $(BUILDDIR)/callscope_runtime/trace.o
 
 # Instrumentation runtime: compiled WITHOUT -finstrument-functions (via
 # CFLAGS_SYMBOLS, not CFLAGS_INSTRUMENT) so the hooks cannot recurse.
-$(TRACE_OBJ): $(TRACEKIT_DIR)/trace.c $(TRACEKIT_DIR)/trace.h $(TRACEKIT_DIR)/trace_shm.h | $(BUILDDIR)
+$(TRACE_OBJ): $(CALLSCOPE_DIR)/trace.c $(CALLSCOPE_DIR)/trace.h $(CALLSCOPE_DIR)/trace_shm.h | $(BUILDDIR)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS_SYMBOLS) -c -o $@ $<

@@ -1,5 +1,5 @@
 [project]
-name = "tracekit"
+name = "callscope"
 version = "0.1.0"
 description = "Compile-time function tracing for C/C++ projects: selective -finstrument-functions coverage from one config file, zero source edits."
 readme = "README.md"
@@ -12,14 +12,22 @@ ui = ["fastapi>=0.110", "uvicorn>=0.29"]
 stream = ["zstandard>=0.22"]
 
 [project.scripts]
-tracekit = "tracekit.cli:main"
+callscope = "callscope.cli:main"
+
+[project.urls]
+Homepage = "https://harshithsunku.github.io/callscope/"
+Repository = "https://github.com/harshithsunku/callscope"
+Issues = "https://github.com/harshithsunku/callscope/issues"
+
+[dependency-groups]
+docs = ["mkdocs-material>=9.5", "pymdown-extensions>=10.7"]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 # Hatchling ships everything under the package dir, including the non-Python
-# payload (runtime C sources, Make/CMake integrations) that `tracekit init`
+# payload (runtime C sources, Make/CMake integrations) that `callscope init`
 # copies into target projects.
 [tool.hatch.build.targets.wheel]
-packages = ["src/tracekit"]
+packages = ["src/callscope"]

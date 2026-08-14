@@ -1,4 +1,4 @@
-"""FastAPI app for the tracekit web UI.
+"""FastAPI app for the callscope web UI.
 
 Endpoints operate on a project directory on the server's filesystem:
 browse for a folder, edit its trace.config, preview the selection, build
@@ -16,11 +16,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from tracekit import analyze, cli, flags
+from callscope import analyze, cli, flags
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
-app = FastAPI(title="tracekit", docs_url=None, redoc_url=None)
+app = FastAPI(title="callscope", docs_url=None, redoc_url=None)
 
 
 def project_path(raw):
@@ -41,10 +41,10 @@ def run_cmd(cmd, cwd, timeout, env=None):
         return False, f"timed out after {timeout}s"
 
 
-def tracekit_cmd():
-    """How to invoke the tracekit CLI from build integrations."""
-    exe = shutil.which("tracekit")
-    return exe if exe else f"{sys.executable} -m tracekit.cli"
+def callscope_cmd():
+    """How to invoke the callscope CLI from build integrations."""
+    exe = shutil.which("callscope")
+    return exe if exe else f"{sys.executable} -m callscope.cli"
 
 
 def cmake_cmd():
@@ -92,7 +92,7 @@ def project_info(path: str):
     binaries = [str(b.relative_to(p)) for b in find_instr_binary(p)]
     return {"path": str(p), "sources": len(sources), "build": build,
             "has_config": (p / "trace.config").exists(),
-            "has_tracekit_dir": (p / "tracekit").is_dir(),
+            "has_callscope_dir": (p / "callscope").is_dir(),
             "binaries": binaries,
             "has_traces": any((p / "traces").glob("trace.*.bin"))
             if (p / "traces").is_dir() else False}
@@ -133,17 +133,17 @@ def scan(path: str):
 
 class BuildBody(BaseModel):
     path: str
-    tracekit: str = ""   # override for the TRACEKIT make variable
+    callscope: str = ""   # override for the CALLSCOPE make variable
     timeout: int = 300
 
 
 @app.post("/api/build")
 def build(body: BuildBody):
     p = project_path(body.path)
-    tk = body.tracekit or tracekit_cmd()
+    tk = body.callscope or callscope_cmd()
     logs = []
     if (p / "Makefile").exists():
-        ok, out = run_cmd(["make", "instrument", f"TRACEKIT={tk}"], p,
+        ok, out = run_cmd(["make", "instrument", f"CALLSCOPE={tk}"], p,
                           body.timeout)
         logs.append(f"$ make instrument\n{out}")
     elif (p / "CMakeLists.txt").exists():
@@ -151,8 +151,8 @@ def build(body: BuildBody):
         tk_list = tk.split(" ", 1)
         cmd = tk_list[0] if len(tk_list) == 1 else ";".join(tk_list)
         ok1, out1 = run_cmd(
-            cmake + ["-DTRACEKIT_INSTRUMENT=ON",
-                     f"-DTRACEKIT_COMMAND={cmd}", "-B", "build-instr"],
+            cmake + ["-DCALLSCOPE_INSTRUMENT=ON",
+                     f"-DCALLSCOPE_COMMAND={cmd}", "-B", "build-instr"],
             p, body.timeout)
         logs.append(f"$ {' '.join(cmake)} configure\n{out1}")
         ok = ok1

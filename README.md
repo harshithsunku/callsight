@@ -1,4 +1,12 @@
-# tracekit — compile-time function tracing for C/C++
+# callscope — compile-time function tracing for C/C++
+
+[![ci](https://github.com/harshithsunku/callscope/actions/workflows/ci.yml/badge.svg)](https://github.com/harshithsunku/callscope/actions/workflows/ci.yml)
+[![docs](https://github.com/harshithsunku/callscope/actions/workflows/pages.yml/badge.svg)](https://harshithsunku.github.io/callscope/)
+[![PyPI](https://img.shields.io/pypi/v/callscope.svg)](https://pypi.org/project/callscope/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+**Docs: https://harshithsunku.github.io/callscope/** ·
+[Status & roadmap](STATUS.md)
 
 Add entry/exit timing hooks to **every function in a C/C++ project at
 compile time, with zero edits to its sources**, control exactly which files,
@@ -9,8 +17,9 @@ Clang, C and C++, with GNU Make and CMake projects.
 ## Install
 
 ```sh
-uv tool install .          # from this repo; puts `tracekit` on your PATH
-uv tool install '.[ui]'    # same, plus the optional web UI
+uv tool install callscope        # from PyPI; puts `callscope` on your PATH
+uv tool install 'callscope[ui]'  # same, plus the optional web UI
+uv tool install .                # or from a source checkout
 ```
 
 (Requires [uv](https://docs.astral.sh/uv/). The tool itself is Python
@@ -19,7 +28,7 @@ stdlib-only; the runtime it injects is dependency-free C.)
 ## Web UI
 
 ```sh
-tracekit ui                # serves http://127.0.0.1:8321
+callscope ui                # serves http://127.0.0.1:8321
 ```
 
 A local web app that walks the whole workflow against any project on the
@@ -33,22 +42,22 @@ needed; bind address defaults to localhost.
 
 ```sh
 cd /path/to/your/project
-tracekit init .          # copies runtime + build wiring, writes trace.config
+callscope init .          # copies runtime + build wiring, writes trace.config
 ```
 
 Then follow the printed wiring snippet for your build system:
 
-- **Make**: `include tracekit/Makefile.tracekit`, add an `instrument`
+- **Make**: `include callscope/Makefile.callscope`, add an `instrument`
   target linking `$(TRACE_OBJ)` with `-no-pie` (snippet printed by `init`).
-- **CMake**: `include(TraceKit)` + `tracekit_instrument(<target>)`, then
-  configure with `-DTRACEKIT_INSTRUMENT=ON`.
+- **CMake**: `include(CallScope)` + `callscope_instrument(<target>)`, then
+  configure with `-DCALLSCOPE_INSTRUMENT=ON`.
 
 ## Collect and analyze
 
 ```sh
 make instrument                                 # or: cmake --build build-instr
 TRACE_ENABLE=1 TRACE_MAX=1000000 ./yourapp      # collect (inert without TRACE_ENABLE=1)
-tracekit analyze traces/ --exe ./yourapp --top 20
+callscope analyze traces/ --exe ./yourapp --top 20
 ```
 
 The analyzer reports calls / inclusive / self / max time per function,
@@ -57,7 +66,7 @@ resolving symbols — including `static` functions — with `addr2line`.
 
 ## How it works
 
-1. `tracekit flags` turns `trace.config` + your source list into
+1. `callscope flags` turns `trace.config` + your source list into
    `-finstrument-functions` plus compile-time exclude lists
    (`-finstrument-functions-exclude-file-list/-exclude-function-list`).
 2. The compiler emits calls to `__cyg_profile_func_enter/exit` at the
@@ -66,7 +75,7 @@ resolving symbols — including `static` functions — with `addr2line`.
 3. The hook runtime (`trace.c`, itself compiled without the flag) appends
    32-byte events to a per-thread buffer — no locks, no malloc, no I/O in
    the hot path — flushing `trace.<pid>.<tid>.bin` when full or at exit.
-4. `tracekit analyze` matches enter/exit events per thread and prints
+4. `callscope analyze` matches enter/exit events per thread and prints
    hotspot tables.
 
 ## Selection strategy (important at scale)
@@ -83,7 +92,7 @@ millions of events per second. Levers, cheapest first:
    much* you pay.
 4. **Source opt-out** (optional): `__attribute__((no_instrument_function))`.
 
-`tracekit scan <dir> --config trace.config` previews what a config selects.
+`callscope scan <dir> --config trace.config` previews what a config selects.
 
 Runtime knobs: `TRACE_ENABLE` (default off), `TRACE_DIR` (default
 `./traces`), `TRACE_MAX` (global event cap — always set one for long runs),
@@ -98,15 +107,15 @@ on-device client forwards events ZSTD-compressed over raw TCP.
 
 ```sh
 # analysis host (powerful machine):
-tracekit serve --port 9001 --out traces/     # needs tracekit[stream]
+callscope serve --port 9001 --out traces/     # needs callscope[stream]
 
 # adopt with streaming support:
-tracekit init --stream /path/to/project      # adds trace_stream.c + zstd.c
+callscope init --stream /path/to/project      # adds trace_stream.c + zstd.c
 
 # on the device:
-cc -O2 -o tracekit/trace_stream tracekit/trace_stream.c tracekit/zstd.c
-./tracekit/trace_stream /tracekit0 <server-ip> 9001 &
-TRACE_ENABLE=1 TRACE_SHM=/tracekit0 ./yourapp.instr
+cc -O2 -o callscope/trace_stream callscope/trace_stream.c callscope/zstd.c
+./callscope/trace_stream /callscope0 <server-ip> 9001 &
+TRACE_ENABLE=1 TRACE_SHM=/callscope0 ./yourapp.instr
 ```
 
 - The traced process does **no disk or network I/O** — only a shared-memory
@@ -114,40 +123,40 @@ TRACE_ENABLE=1 TRACE_SHM=/tracekit0 ./yourapp.instr
 - If the ring fills faster than the client drains (network slow, ring too
   small), events are **dropped and counted**, never blocking the workload;
   the server reports the drop count. Size the ring with `TRACE_SHM_SIZE`.
-- The server writes standard `trace.stream.*.bin` files — `tracekit
+- The server writes standard `trace.stream.*.bin` files — `callscope
   analyze` and the web UI consume them unchanged.
 - The client is self-contained C built against the vendored single-file
-  zstd v1.5.7 (`src/tracekit/stream/zstd.c`, generated from the official
+  zstd v1.5.7 (`src/callscope/stream/zstd.c`, generated from the official
   repo's `build/single_file_libs`; BSD license in `zstd.LICENSE`).
 
 ## CLI reference
 
 | command | purpose |
 |---|---|
-| `tracekit init <dir> [--build make\|cmake]` | adopt into a project |
-| `tracekit scan <dir> [--config c]` | preview instrumentation selection |
-| `tracekit flags --config c -- srcs...` | print compiler flags (build integrations use this) |
-| `tracekit analyze [traces/] [--exe bin] [--top N]` | hotspot report |
-| `tracekit ui [--host H] [--port P]` | web UI (needs `tracekit[ui]`) |
-| `tracekit serve [--host H] [--port P] [--out dir]` | TCP server for remote streams (needs `tracekit[stream]`) |
+| `callscope init <dir> [--build make\|cmake]` | adopt into a project |
+| `callscope scan <dir> [--config c]` | preview instrumentation selection |
+| `callscope flags --config c -- srcs...` | print compiler flags (build integrations use this) |
+| `callscope analyze [traces/] [--exe bin] [--top N]` | hotspot report |
+| `callscope ui [--host H] [--port P]` | web UI (needs `callscope[ui]`) |
+| `callscope serve [--host H] [--port P] [--out dir]` | TCP server for remote streams (needs `callscope[stream]`) |
 
 ## Repo layout
 
-- `src/tracekit/` — the tool: `cli.py`, `flags.py` (config → compiler
-  flags), `analyze.py` (offline analyzer); stdlib-only. `src/tracekit/ui/`
-  is the optional web UI (FastAPI, only imported by `tracekit ui`).
-- `src/tracekit/runtime/` — `trace.c`/`trace.h`/`trace_shm.h`, the hook
+- `src/callscope/` — the tool: `cli.py`, `flags.py` (config → compiler
+  flags), `analyze.py` (offline analyzer); stdlib-only. `src/callscope/ui/`
+  is the optional web UI (FastAPI, only imported by `callscope ui`).
+- `src/callscope/runtime/` — `trace.c`/`trace.h`/`trace_shm.h`, the hook
   runtime copied into adopted projects. Self-contained C, no deps beyond
   pthreads.
-- `src/tracekit/stream/` — `trace_stream.c` on-device streaming client +
+- `src/callscope/stream/` — `trace_stream.c` on-device streaming client +
   vendored single-file zstd v1.5.7 (`zstd.c`, BSD — see `zstd.LICENSE`).
-- `src/tracekit/share/Makefile.tracekit`, `src/tracekit/cmake/TraceKit.cmake`
+- `src/callscope/share/Makefile.callscope`, `src/callscope/cmake/CallScope.cmake`
   — build-system integrations.
 - `tests/matrixlab/` — multi-threaded C11 demo workload; doubles as the
-  end-to-end smoke test (`make instrument` → run → `tracekit analyze`).
+  end-to-end smoke test (`make instrument` → run → `callscope analyze`).
 - `tests/cmake_demo/` — tiny CMake fixture for the CMake integration.
 - `docs/instrumentation-options.md` — survey of GCC/Clang compile-time
-  instrumentation mechanisms and how they map to tracekit's roadmap.
+  instrumentation mechanisms and how they map to callscope's roadmap.
 
 ## Known limitations
 
@@ -160,10 +169,10 @@ TRACE_ENABLE=1 TRACE_SHM=/tracekit0 ./yourapp.instr
 
 ## Roadmap
 
-- **Phase 2 — web UI**: done (`tracekit ui`, optional `tracekit[ui]` extra).
+- **Phase 2 — web UI**: done (`callscope ui`, optional `callscope[ui]` extra).
   Next: richer report views (call graphs, flame graphs), live build-log
   streaming.
 - **Phase 3 — remote streaming**: done (`TRACE_SHM` ring → `trace_stream`
-  client → ZSTD/TCP → `tracekit serve`). Next: runtime on/off via
+  client → ZSTD/TCP → `callscope serve`). Next: runtime on/off via
   `-fpatchable-function-entry` (see docs/instrumentation-options.md), live
   stream view in the web UI.

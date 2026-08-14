@@ -6,7 +6,7 @@ Reads a trace.config plus the project's source file list, decides which
 translation units get -finstrument-functions, and prints the resulting
 compiler flags. Typical use inside a Makefile:
 
-    $(eval $(shell tracekit flags --config trace.config -- $(SRCS)))
+    $(eval $(shell callscope flags --config trace.config -- $(SRCS)))
 
 or standalone:
 

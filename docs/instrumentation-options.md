@@ -1,12 +1,12 @@
 # Compile-time function instrumentation: GCC/Clang options survey
 
 What each compiler mechanism can do, what it costs, and how it maps to
-tracekit's backends. Overhead figures are order-of-magnitude, per event,
+callscope's backends. Overhead figures are order-of-magnitude, per event,
 assuming a lean hook (no I/O in the hot path).
 
 ## Summary table
 
-| mechanism | compilers | granularity | runtime toggle | overhead/event | tracekit verdict |
+| mechanism | compilers | granularity | runtime toggle | overhead/event | callscope verdict |
 |---|---|---|---|---|---|
 | `-finstrument-functions` | GCC, Clang | function entry/exit | no (compile-time) | ~30–60 ns | **default backend** |
 | `-finstrument-functions-after-inlining` | Clang | post-inline entry/exit | no | ~30–60 ns | Clang enhancement |
@@ -32,7 +32,7 @@ fire even when you don't want data, so runtime gating (`TRACE_ENABLE`) is a
 flag check per event; `-no-pie` (or offset bookkeeping) is needed to map
 addresses back to symbols.
 
-This is tracekit's default: universal (GCC + Clang, C + C++), simple, and
+This is callscope's default: universal (GCC + Clang, C + C++), simple, and
 the exclude lists give exactly the "one config file" selection model.
 
 ## `-finstrument-functions-after-inlining` (Clang)
@@ -48,7 +48,7 @@ source-level one.
 The original: entry-only hook into `mcount`, plus flat-profile sampling.
 Call-graph arcs only (no exit timing per call, timing comes from sampling),
 PLT/shared-library blind spots, and effectively unmaintained semantics with
-modern optimization. Documented for completeness; tracekit does not use it.
+modern optimization. Documented for completeness; callscope does not use it.
 
 ## `-fpatchable-function-entry=N,M`
 
@@ -82,7 +82,7 @@ entry/exit that are **patched at runtime** through a supported API
 (`-fxray-instruction-threshold`, attribute/whitelist), and a logging
 library (FDR and basic modes) writing binary flight-recorder traces with a
 structured trace format and tools (`llvm-xray`). Closest existing model for
-tracekit's Phase-3 streaming design — study its sled layout and FDR
+callscope's Phase-3 streaming design — study its sled layout and FDR
 buffering before designing ours. Not usable as the default: Clang-only.
 
 ## gcov / `-fprofile-arcs -ftest-coverage`
@@ -106,11 +106,11 @@ fragile, Clang has no equivalent, and distribution is a nightmare. Non-goal.
   machinery, root requirements. Out of scope.
 - uftrace — userspace tracer built on `-pg`/`-finstrument-functions` plus
   its own libmcount runtime, with a dynamic mode on
-  `-fpatchable-function-entry`. The closest relative project; tracekit
+  `-fpatchable-function-entry`. The closest relative project; callscope
   differs in zero-runtime-dependency adoption and the config-file selection
   workflow.
 
-## Conclusions for tracekit
+## Conclusions for callscope
 
 1. **Default backend:** `-finstrument-functions` + exclude lists (GCC and
    Clang). Unchanged.

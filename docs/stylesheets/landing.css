@@ -1,0 +1,85 @@
+/* Landing page styling (loaded site-wide, classes only used on index) */
+
+.hero {
+  text-align: center;
+  padding: 3.2rem 1rem 2.2rem;
+  margin: -1rem -0.8rem 2rem;
+  background: linear-gradient(160deg, rgba(124, 77, 255, .18), rgba(0, 229, 255, .07) 60%, transparent);
+  border-radius: 1rem;
+}
+.hero-title h1 {
+  font-size: 3.2rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0;
+  background: linear-gradient(90deg, #b388ff, #4dd0e1);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.hero-tag {
+  font-size: 1.05rem;
+  opacity: .85;
+  margin: .6rem 0 1.2rem;
+}
+.hero-actions { margin-bottom: 1.1rem; }
+.hero-actions .md-button { margin: 0 .3rem; }
+.hero-install {
+  display: inline-block;
+  font-family: var(--md-code-font-family, monospace);
+  background: rgba(127, 127, 127, .12);
+  border: 1px solid rgba(127, 127, 127, .35);
+  border-radius: .4rem;
+  padding: .45rem 1rem;
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: .8rem;
+  margin: 1.5rem 0 2rem;
+}
+.feature {
+  border: 1px solid rgba(127, 127, 127, .3);
+  border-radius: .6rem;
+  padding: .9rem 1.1rem;
+  background: rgba(127, 127, 127, .06);
+}
+.feature h3 { margin: 0 0 .35rem; font-size: .95rem; }
+.feature p, .feature { font-size: .82rem; }
+
+/* Architecture diagram */
+.arch {
+  overflow-x: auto;
+  padding: 1rem .5rem;
+  border: 1px solid rgba(127, 127, 127, .3);
+  border-radius: .6rem;
+  background: rgba(127, 127, 127, .05);
+}
+.arch svg { min-width: 760px; width: 100%; height: auto; }
+.arch-box {
+  fill: rgba(127, 127, 127, .10);
+  stroke: rgba(127, 127, 127, .55);
+  stroke-width: 1.2;
+}
+.arch-box.accent { stroke: #7c4dff; fill: rgba(124, 77, 255, .14); }
+.arch-box.good   { stroke: #26c6da; fill: rgba(38, 198, 218, .12); }
+.arch-label {
+  fill: currentColor;
+  font: 600 13.5px ui-monospace, monospace;
+  text-anchor: middle;
+}
+.arch-sub {
+  fill: currentColor;
+  opacity: .6;
+  font: 11px ui-monospace, monospace;
+  text-anchor: middle;
+}
+.arch-phase {
+  fill: currentColor;
+  opacity: .55;
+  font: 700 11px sans-serif;
+  letter-spacing: .12em;
+}
+.arch-line { stroke: #4dd0e1; stroke-width: 1.6; opacity: .8; }
+.arch-arrow { fill: #4dd0e1; opacity: .9; }

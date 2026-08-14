@@ -153,7 +153,7 @@ NOINSTR static void trace_global_init(void) {
         if (g_shm) {
             __sync_fetch_and_add(&g_shm->writers, 1);
         } else {
-            fprintf(stderr, "tracekit: cannot attach shm %s, "
+            fprintf(stderr, "callscope: cannot attach shm %s, "
                             "falling back to trace files\n", env);
         }
     }

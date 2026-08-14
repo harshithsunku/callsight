@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-tracekit — compile-time function tracing for C/C++ projects.
+callscope — compile-time function tracing for C/C++ projects.
 
 Subcommands:
-  init     adopt tracekit into a project (copies runtime + build wiring)
+  init     adopt callscope into a project (copies runtime + build wiring)
   scan     show which sources a trace.config would instrument
   flags    print compiler flags (used by Make/CMake integrations)
   analyze  offline hotspot report from a traces/ directory
@@ -15,10 +15,10 @@ import sys
 from pathlib import Path
 
 try:
-    from tracekit import analyze, flags
-except ImportError:  # direct execution: python3 src/tracekit/cli.py
+    from callscope import analyze, flags
+except ImportError:  # direct execution: python3 src/callscope/cli.py
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from tracekit import analyze, flags
+    from callscope import analyze, flags
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 RUNTIME_DIR = PACKAGE_DIR / "runtime"
@@ -56,8 +56,8 @@ CONFIG_TEMPLATE = """\
 MAKE_WIRING = """\
 Add to your Makefile (after SRCS/OBJS/CFLAGS_SYMBOLS are defined):
 
-    TRACEKIT_DIR ?= tracekit
-    include $(TRACEKIT_DIR)/Makefile.tracekit
+    CALLSCOPE_DIR ?= callscope
+    include $(CALLSCOPE_DIR)/Makefile.callscope
 
     instrument: CFLAGS = $(CFLAGS_INSTRUMENT)
     instrument: $(BINDIR)/$(TARGET).instr
@@ -65,18 +65,18 @@ Add to your Makefile (after SRCS/OBJS/CFLAGS_SYMBOLS are defined):
     \t$(CC) $(CFLAGS_INSTRUMENT) -no-pie -o $@ $(OBJS) $(TRACE_OBJ) $(LDFLAGS)
 
 The fragment expects SRCS, BUILDDIR, BINDIR, TARGET, CC, CFLAGS_SYMBOLS and
-LDFLAGS from your Makefile; see tracekit/Makefile.tracekit for details."""
+LDFLAGS from your Makefile; see callscope/Makefile.callscope for details."""
 
 CMAKE_WIRING = """\
 Add to your CMakeLists.txt after the target is defined:
 
-    list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/tracekit")
-    include(TraceKit)
-    tracekit_instrument(<your-target>)
+    list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/callscope")
+    include(CallScope)
+    callscope_instrument(<your-target>)
 
 Then configure an instrumented build with:
 
-    cmake -DTRACEKIT_INSTRUMENT=ON -B build-instr && cmake --build build-instr"""
+    cmake -DCALLSCOPE_INSTRUMENT=ON -B build-instr && cmake --build build-instr"""
 
 
 def cmd_init(args):
@@ -91,7 +91,7 @@ def cmd_init(args):
         else:
             build = "make"
 
-    dest = project / "tracekit"
+    dest = project / "callscope"
     dest.mkdir(exist_ok=True)
     for f in ("trace.c", "trace.h", "trace_shm.h"):
         shutil.copy2(RUNTIME_DIR / f, dest / f)
@@ -100,9 +100,9 @@ def cmd_init(args):
                   "zstd.LICENSE"):
             shutil.copy2(STREAM_DIR / f, dest / f)
     if build == "make":
-        shutil.copy2(SHARE_DIR / "Makefile.tracekit", dest / "Makefile.tracekit")
+        shutil.copy2(SHARE_DIR / "Makefile.callscope", dest / "Makefile.callscope")
     else:
-        shutil.copy2(CMAKE_DIR / "TraceKit.cmake", dest / "TraceKit.cmake")
+        shutil.copy2(CMAKE_DIR / "CallScope.cmake", dest / "CallScope.cmake")
 
     config = project / "trace.config"
     if config.exists():
@@ -119,10 +119,10 @@ def cmd_init(args):
     if args.stream:
         print()
         print("Streaming client (build on the device):")
-        print("    cc -O2 -o tracekit/trace_stream tracekit/trace_stream.c "
-              "tracekit/zstd.c")
+        print("    cc -O2 -o callscope/trace_stream callscope/trace_stream.c "
+              "callscope/zstd.c")
     print()
-    print("Then: build, run with TRACE_ENABLE=1, and 'tracekit analyze traces/'.")
+    print("Then: build, run with TRACE_ENABLE=1, and 'callscope analyze traces/'.")
 
 
 def cmd_scan(args):
@@ -142,8 +142,8 @@ def cmd_ui(args):
         import uvicorn
     except ImportError:
         sys.exit("the web UI needs the optional dependencies — "
-                 "install with: uv tool install 'tracekit[ui]'")
-    from tracekit.ui.app import app
+                 "install with: uv tool install 'callscope[ui]'")
+    from callscope.ui.app import app
     uvicorn.run(app, host=args.host, port=args.port)
 
 
@@ -152,8 +152,8 @@ def cmd_serve(args):
         import zstandard  # noqa: F401
     except ImportError:
         sys.exit("the streaming server needs the optional dependencies — "
-                 "install with: uv tool install 'tracekit[stream]'")
-    from tracekit.serve import serve
+                 "install with: uv tool install 'callscope[stream]'")
+    from callscope.serve import serve
     serve(args.host, args.port, args.out)
 
 
@@ -170,11 +170,11 @@ def main(argv=None):
         return
 
     ap = argparse.ArgumentParser(
-        prog="tracekit", description=__doc__,
+        prog="callscope", description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="command", required=True)
 
-    p_init = sub.add_parser("init", help="adopt tracekit into a project")
+    p_init = sub.add_parser("init", help="adopt callscope into a project")
     p_init.add_argument("project", help="project root directory")
     p_init.add_argument("--build", choices=("make", "cmake"), default=None,
                         help="build system (default: auto-detect)")
@@ -188,13 +188,13 @@ def main(argv=None):
     p_scan.add_argument("--config", default="trace.config")
     p_scan.set_defaults(func=cmd_scan)
 
-    p_ui = sub.add_parser("ui", help="start the web UI (needs tracekit[ui])")
+    p_ui = sub.add_parser("ui", help="start the web UI (needs callscope[ui])")
     p_ui.add_argument("--host", default="127.0.0.1")
     p_ui.add_argument("--port", type=int, default=8321)
     p_ui.set_defaults(func=cmd_ui)
 
     p_serve = sub.add_parser("serve", help="TCP server for remote trace "
-                                           "streams (needs tracekit[stream])")
+                                           "streams (needs callscope[stream])")
     p_serve.add_argument("--host", default="0.0.0.0")
     p_serve.add_argument("--port", type=int, default=9001)
     p_serve.add_argument("--out", default="traces",
