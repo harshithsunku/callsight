@@ -20,7 +20,7 @@ remote streaming from constrained devices over ZSTD-compressed TCP.
 | Docs site (GitHub Pages) | ✅ done | MkDocs Material, auto-deployed by CI |
 | CI | ✅ done | unit + 3 end-to-end smoke jobs on every push |
 | Release pipeline | ✅ wired | tag `v*` → GitHub Release + PyPI (trusted publishing) |
-| First PyPI release | ⏳ pending | one-time pending-publisher setup on pypi.org, then push tag `v0.1.0` |
+| First PyPI release | ✅ done | v0.1.0 on PyPI via trusted publishing; releases are tag-driven (`git tag vX.Y.Z && git push --tags`) |
 
 ## Roadmap
 

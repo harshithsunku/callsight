@@ -222,6 +222,16 @@ def cmd_serve(args):
     serve(args.host, args.port, args.out)
 
 
+def package_version():
+    """Installed dist version; falls back to the package constant."""
+    try:
+        from importlib.metadata import version
+        return version("callsight")
+    except Exception:
+        from callsight import __version__
+        return __version__
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
 
@@ -237,6 +247,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="callsight", description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--version", action="version",
+                    version=f"%(prog)s {package_version()}")
     sub = ap.add_subparsers(dest="command", required=True)
 
     p_init = sub.add_parser("init", help="adopt callsight into a project")
