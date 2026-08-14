@@ -1,4 +1,4 @@
-"""Unit tests for callscope.callgraph and include-func selection."""
+"""Unit tests for callsight.callgraph and include-func selection."""
 
 import os
 import sys
@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from callscope import callgraph, flags
+from callsight import callgraph, flags
 
 MAIN_C = """\
 #include "helper.h"

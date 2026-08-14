@@ -18,19 +18,19 @@ include-func <name> [depth]
 
 ## Selection levels
 
-callscope selects at three levels, from coarsest to finest:
+callsight selects at three levels, from coarsest to finest:
 
 1. **File/folder** — `include` / `exclude` patterns (below).
 2. **Function + call subtree ("task level")** — `include-func` names an
-   entry point (a task, a request handler, a workload); callscope parses
+   entry point (a task, a request handler, a workload); callsight parses
    the sources, builds a static call graph, and instruments exactly the
    reachable subtree. Everything else defined in those files — including
    helpers defined in headers — is excluded at compile time. Explore
    before you commit:
    ```sh
-   callscope select src/ --function workload_sort          # full subtree
-   callscope select src/ --function workload_sort --depth 1
-   callscope select src/ --list                            # all functions
+   callsight select src/ --function workload_sort          # full subtree
+   callsight select src/ --function workload_sort --depth 1
+   callsight select src/ --list                            # all functions
    ```
    Static resolution does not follow function pointers, macro-generated
    functions, or C++ dynamic dispatch — those callees simply don't get
@@ -58,7 +58,7 @@ free at runtime. Prefer it over any runtime filtering.
 Preview what a config selects without building:
 
 ```sh
-callscope scan src/ --config trace.config
+callsight scan src/ --config trace.config
 ```
 
 ## Selection strategy at scale

@@ -1,4 +1,4 @@
-"""Unit tests for callscope.flags: config parsing, pattern matching, selection."""
+"""Unit tests for callsight.flags: config parsing, pattern matching, selection."""
 
 import os
 import sys
@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from callscope import flags
+from callsight import flags
 
 
 class TestParseConfig(unittest.TestCase):

@@ -22,7 +22,7 @@ jobs:
           make clean && make instrument
           rm -rf traces
           TRACE_ENABLE=1 TRACE_MAX=1000000 timeout 5 ./bin/matrixlab.instr || true
-          uv run callscope analyze traces/ --exe bin/matrixlab.instr \
+          uv run callsight analyze traces/ --exe bin/matrixlab.instr \
             | tee analyze.out
           grep -q "unmatched_exits=0" analyze.out
 

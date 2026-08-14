@@ -2,31 +2,31 @@
 
 ## What this repo is
 
-**callscope** — an open-source compile-time function-tracing toolkit for
+**callsight** — an open-source compile-time function-tracing toolkit for
 C/C++ projects (GCC/Clang, Make/CMake). Adopted into a target project via
-the `callscope` CLI (`uv` package); adds entry/exit hooks at compile time
+the `callsight` CLI (`uv` package); adds entry/exit hooks at compile time
 with zero source edits, controlled by a single `trace.config`.
 
 Layout:
 
-- `src/callscope/` — the Python package (stdlib-only core): `cli.py` (init /
+- `src/callsight/` — the Python package (stdlib-only core): `cli.py` (init /
   scan / flags / analyze / ui), `flags.py`, `analyze.py`.
-- `src/callscope/ui/` — optional web UI (FastAPI + single-page frontend in
+- `src/callsight/ui/` — optional web UI (FastAPI + single-page frontend in
   `static/`); third-party deps live in the `ui` extra, imported only by
-  `callscope ui`.
-- `src/callscope/runtime/` — `trace.c` / `trace.h` / `trace_shm.h`: the hook
+  `callsight ui`.
+- `src/callsight/runtime/` — `trace.c` / `trace.h` / `trace_shm.h`: the hook
   runtime and shared-memory ring protocol. Self-contained; must stay free
   of project-specific dependencies.
-- `src/callscope/stream/` — `trace_stream.c` (on-device streaming client)
+- `src/callsight/stream/` — `trace_stream.c` (on-device streaming client)
   plus vendored single-file zstd v1.5.7 (`zstd.c` / `zstd.h` /
   `zstd_errors.h`, BSD — `zstd.LICENSE`). Regenerate from the official
   repo's `build/single_file_libs/create_single_file_library.sh` if zstd
   ever needs an upgrade.
-- `src/callscope/serve.py` — TCP server for remote streams (`callscope
+- `src/callsight/serve.py` — TCP server for remote streams (`callsight
   serve`); zstandard dep lives in the `stream` extra.
-- `src/callscope/share/Makefile.callscope`, `src/callscope/cmake/CallScope.cmake`
+- `src/callsight/share/Makefile.callsight`, `src/callsight/cmake/CallSight.cmake`
   — build-system integrations (copied into adopted projects by
-  `callscope init`).
+  `callsight init`).
 - `tests/matrixlab/` — demo C11/pthreads workload; the end-to-end fixture.
 - `tests/cmake_demo/` — minimal CMake integration fixture.
 - `tests/test_select.py` — unit tests for config parsing/selection.
@@ -39,11 +39,11 @@ Layout:
 python3 -m unittest discover -s tests
 
 # CLI without installing:
-uv run callscope --help
+uv run callsight --help
 # web UI (optional deps via the ui extra):
-uv run --extra ui callscope ui          # http://127.0.0.1:8321
+uv run --extra ui callsight ui          # http://127.0.0.1:8321
 # installed:
-uv tool install . && callscope --help
+uv tool install . && callsight --help
 # docs site (GitHub Pages content):
 uv run --group docs mkdocs serve        # local preview
 uv run --group docs mkdocs build --strict   # must stay clean
@@ -52,25 +52,25 @@ uv run --group docs mkdocs build --strict   # must stay clean
 cd tests/matrixlab
 make clean && make instrument          # clean REQUIRED when switching profiles
 TRACE_ENABLE=1 TRACE_MAX=1000000 timeout 5 ./bin/matrixlab.instr
-uv run callscope analyze traces/ --top 20
+uv run callsight analyze traces/ --top 20
 
 # end-to-end smoke test (CMake integration, cmake via uvx — no system cmake):
 cd tests/cmake_demo
-uvx cmake -DCALLSCOPE_INSTRUMENT=ON \
-    "-DCALLSCOPE_COMMAND=python3;$PWD/../../src/callscope/cli.py" -B build-instr
+uvx cmake -DCALLSIGHT_INSTRUMENT=ON \
+    "-DCALLSIGHT_COMMAND=python3;$PWD/../../src/callsight/cli.py" -B build-instr
 uvx cmake --build build-instr
 TRACE_ENABLE=1 TRACE_MAX=200000 ./build-instr/demo
-uv run callscope analyze traces/ --exe build-instr/demo
+uv run callsight analyze traces/ --exe build-instr/demo
 
 # end-to-end smoke test (remote streaming):
-uv run --extra stream callscope serve --port 9001 --out /tmp/stream_traces &
-gcc -O2 -I src/callscope/runtime -o /tmp/trace_stream \
-    src/callscope/stream/trace_stream.c src/callscope/stream/zstd.c
+uv run --extra stream callsight serve --port 9001 --out /tmp/stream_traces &
+gcc -O2 -I src/callsight/runtime -o /tmp/trace_stream \
+    src/callsight/stream/trace_stream.c src/callsight/stream/zstd.c
 /tmp/trace_stream /tk_smoke 127.0.0.1 9001 &
 cd tests/matrixlab
 TRACE_ENABLE=1 TRACE_SHM=/tk_smoke TRACE_MAX=500000 timeout 5 ./bin/matrixlab.instr
 # client exits after drain; then:
-uv run callscope analyze /tmp/stream_traces --exe bin/matrixlab.instr
+uv run callsight analyze /tmp/stream_traces --exe bin/matrixlab.instr
 rm -f /dev/shm/tk_smoke
 ```
 
@@ -84,8 +84,8 @@ hotspots (cmake_demo must show only `fib` — `mix` is excluded).
   (short `/* ... */` above each function).
 - Python: stdlib only in the core package (`cli.py`, `flags.py`,
   `analyze.py`). Third-party deps are allowed only in the optional extras —
-  `ui` (FastAPI/uvicorn, under `src/callscope/ui/`) and `stream`
-  (zstandard, `src/callscope/serve.py`) — the core must import cleanly
+  `ui` (FastAPI/uvicorn, under `src/callsight/ui/`) and `stream`
+  (zstandard, `src/callsight/serve.py`) — the core must import cleanly
   without them.
 - Streaming mode (`TRACE_SHM`) must never stall the workload: when the
   shared-memory ring is full, drop events and count them in the ring
@@ -94,9 +94,9 @@ hotspots (cmake_demo must show only `fib` — `mix` is excluded).
   thread-related (e.g. TRACE_THREADS matching) must not use process-global
   state (no strtok) and stays out of the flush path.
 - The wire protocol and ring layout live only in
-  `src/callscope/runtime/trace_shm.h`; bump `TRACE_SHM_VERSION` /
+  `src/callsight/runtime/trace_shm.h`; bump `TRACE_SHM_VERSION` /
   `TRACE_STREAM_VERSION` on any layout change.
-- The instrumentation runtime (`src/callscope/runtime/trace.c`) must never
+- The instrumentation runtime (`src/callsight/runtime/trace.c`) must never
   be compiled with `-finstrument-functions`; every function there carries
   `__attribute__((no_instrument_function))`, and both build integrations
   compile it without the flag.
@@ -108,8 +108,8 @@ hotspots (cmake_demo must show only `fib` — `mix` is excluded).
   directives: `include`, `exclude`, `exclude-func`, `include-func`
   (call-subtree selection via `callgraph.py`; auto-excludes must keep the
   substring-collision guard).
-- `CALLSCOPE_COMMAND` in CMake is a cache variable — pass it with `-D`
-  (a plain `set()` before `include(CallScope)` gets shadowed by the cache
+- `CALLSIGHT_COMMAND` in CMake is a cache variable — pass it with `-D`
+  (a plain `set()` before `include(CallSight)` gets shadowed by the cache
   definition under CMP0126).
 - Do not commit `.venv/`, `build*/`, `bin/`, `traces/`, or `site/`
   (see .gitignore).

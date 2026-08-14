@@ -1,8 +1,8 @@
 # Web UI
 
 ```sh
-uv tool install 'callscope[ui]'
-callscope ui                 # http://127.0.0.1:8321
+uv tool install 'callsight[ui]'
+callsight ui                 # http://127.0.0.1:8321
 ```
 
 A local web app that walks the whole tracing workflow against any project

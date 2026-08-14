@@ -6,7 +6,7 @@ Reads a trace.config plus the project's source file list, decides which
 translation units get -finstrument-functions, and prints the resulting
 compiler flags. Typical use inside a Makefile:
 
-    $(eval $(shell callscope flags --config trace.config -- $(SRCS)))
+    $(eval $(shell callsight flags --config trace.config -- $(SRCS)))
 
 or standalone:
 
@@ -58,10 +58,10 @@ import os
 import sys
 
 try:
-    from callscope import callgraph
-except ImportError:  # direct execution: python3 src/callscope/flags.py
+    from callsight import callgraph
+except ImportError:  # direct execution: python3 src/callsight/flags.py
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from callscope import callgraph
+    from callsight import callgraph
 
 SOURCE_SUFFIXES = (".c", ".cc", ".cpp")
 
@@ -194,7 +194,7 @@ def function_selection(include_funcs, sources, includes, excludes):
             sys.exit(f"include-func: '{name}' not found in the scanned "
                      f"sources (function pointers and macro-generated calls "
                      f"are not followed; defined functions are listed by "
-                     f"'callscope select --list')")
+                     f"'callsight select --list')")
         seeds.append(name)
     # Expand each seed with its own depth limit.
     reachable = set()

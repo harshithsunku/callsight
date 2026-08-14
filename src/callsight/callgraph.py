@@ -1,6 +1,6 @@
 """Lightweight static call graph for C/C++ sources.
 
-Powers the `include-func` directive: given a seed function, callscope must
+Powers the `include-func` directive: given a seed function, callsight must
 know which functions it (transitively) calls to instrument exactly that
 subtree. This parser is deliberately heuristic — a full C parser would
 drag in libclang — and the failure mode is documented: calls through

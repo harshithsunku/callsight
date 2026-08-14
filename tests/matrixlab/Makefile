@@ -84,15 +84,15 @@ CFLAGS_SYMBOLS = -std=c11 -O2 -g3 -fno-omit-frame-pointer $(WARNINGS) $(DEFINES)
 
 # Instrument: symbols build + compile-time function entry/exit hooks
 # (-finstrument-functions). CFLAGS_INSTRUMENT and the runtime object rule
-# come from the callscope fragment; selective coverage (files/folders/
+# come from the callsight fragment; selective coverage (files/folders/
 # functions) is edited in ONE place: trace.config next to this Makefile.
 # -no-pie keeps runtime addresses equal to link addresses so the offline
 # analyzer can resolve symbols directly with addr2line.
-CALLSCOPE_REPO   ?= ../..
-CALLSCOPE        ?= python3 $(CALLSCOPE_REPO)/src/callscope/cli.py
-CALLSCOPE_DIR    ?= $(CALLSCOPE_REPO)/src/callscope/runtime
-CALLSCOPE_CONFIG ?= trace.config
-include $(CALLSCOPE_REPO)/src/callscope/share/Makefile.callscope
+CALLSIGHT_REPO   ?= ../..
+CALLSIGHT        ?= python3 $(CALLSIGHT_REPO)/src/callsight/cli.py
+CALLSIGHT_DIR    ?= $(CALLSIGHT_REPO)/src/callsight/runtime
+CALLSIGHT_CONFIG ?= trace.config
+include $(CALLSIGHT_REPO)/src/callsight/share/Makefile.callsight
 LDFLAGS_INSTRUMENT = -no-pie
 
 # Default to debug

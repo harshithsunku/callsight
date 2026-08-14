@@ -1,8 +1,8 @@
-site_name: callscope
+site_name: callsight
 site_description: Compile-time function tracing for C/C++ — zero source edits, one config file, device-to-server streaming
-site_url: https://harshithsunku.github.io/callscope/
-repo_url: https://github.com/harshithsunku/callscope
-repo_name: harshithsunku/callscope
+site_url: https://harshithsunku.github.io/callsight/
+repo_url: https://github.com/harshithsunku/callsight
+repo_name: harshithsunku/callsight
 edit_uri: edit/main/docs/
 
 theme:

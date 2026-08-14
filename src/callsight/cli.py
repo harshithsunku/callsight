@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-callscope — compile-time function tracing for C/C++ projects.
+callsight — compile-time function tracing for C/C++ projects.
 
 Subcommands:
-  init     adopt callscope into a project (copies runtime + build wiring)
+  init     adopt callsight into a project (copies runtime + build wiring)
   scan     show which sources a trace.config would instrument
   flags    print compiler flags (used by Make/CMake integrations)
   analyze  offline hotspot report from a traces/ directory
@@ -15,10 +15,10 @@ import sys
 from pathlib import Path
 
 try:
-    from callscope import analyze, flags
-except ImportError:  # direct execution: python3 src/callscope/cli.py
+    from callsight import analyze, flags
+except ImportError:  # direct execution: python3 src/callsight/cli.py
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from callscope import analyze, flags
+    from callsight import analyze, flags
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 RUNTIME_DIR = PACKAGE_DIR / "runtime"
@@ -62,14 +62,14 @@ CONFIG_TEMPLATE = """\
 #   TRACE_THREADS="worker-*" TRACE_ENABLE=1 ./yourapp
 #
 # Explore what a function's subtree contains:
-#   callscope select src/ --function handle_request
+#   callsight select src/ --function handle_request
 """
 
 MAKE_WIRING = """\
 Add to your Makefile (after SRCS/OBJS/CFLAGS_SYMBOLS are defined):
 
-    CALLSCOPE_DIR ?= callscope
-    include $(CALLSCOPE_DIR)/Makefile.callscope
+    CALLSIGHT_DIR ?= callsight
+    include $(CALLSIGHT_DIR)/Makefile.callsight
 
     instrument: CFLAGS = $(CFLAGS_INSTRUMENT)
     instrument: $(BINDIR)/$(TARGET).instr
@@ -77,18 +77,18 @@ Add to your Makefile (after SRCS/OBJS/CFLAGS_SYMBOLS are defined):
     \t$(CC) $(CFLAGS_INSTRUMENT) -no-pie -o $@ $(OBJS) $(TRACE_OBJ) $(LDFLAGS)
 
 The fragment expects SRCS, BUILDDIR, BINDIR, TARGET, CC, CFLAGS_SYMBOLS and
-LDFLAGS from your Makefile; see callscope/Makefile.callscope for details."""
+LDFLAGS from your Makefile; see callsight/Makefile.callsight for details."""
 
 CMAKE_WIRING = """\
 Add to your CMakeLists.txt after the target is defined:
 
-    list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/callscope")
-    include(CallScope)
-    callscope_instrument(<your-target>)
+    list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/callsight")
+    include(CallSight)
+    callsight_instrument(<your-target>)
 
 Then configure an instrumented build with:
 
-    cmake -DCALLSCOPE_INSTRUMENT=ON -B build-instr && cmake --build build-instr"""
+    cmake -DCALLSIGHT_INSTRUMENT=ON -B build-instr && cmake --build build-instr"""
 
 
 def cmd_init(args):
@@ -103,7 +103,7 @@ def cmd_init(args):
         else:
             build = "make"
 
-    dest = project / "callscope"
+    dest = project / "callsight"
     dest.mkdir(exist_ok=True)
     for f in ("trace.c", "trace.h", "trace_shm.h"):
         shutil.copy2(RUNTIME_DIR / f, dest / f)
@@ -112,9 +112,9 @@ def cmd_init(args):
                   "zstd.LICENSE"):
             shutil.copy2(STREAM_DIR / f, dest / f)
     if build == "make":
-        shutil.copy2(SHARE_DIR / "Makefile.callscope", dest / "Makefile.callscope")
+        shutil.copy2(SHARE_DIR / "Makefile.callsight", dest / "Makefile.callsight")
     else:
-        shutil.copy2(CMAKE_DIR / "CallScope.cmake", dest / "CallScope.cmake")
+        shutil.copy2(CMAKE_DIR / "CallSight.cmake", dest / "CallSight.cmake")
 
     config = project / "trace.config"
     if config.exists():
@@ -131,10 +131,10 @@ def cmd_init(args):
     if args.stream:
         print()
         print("Streaming client (build on the device):")
-        print("    cc -O2 -o callscope/trace_stream callscope/trace_stream.c "
-              "callscope/zstd.c")
+        print("    cc -O2 -o callsight/trace_stream callsight/trace_stream.c "
+              "callsight/zstd.c")
     print()
-    print("Then: build, run with TRACE_ENABLE=1, and 'callscope analyze traces/'.")
+    print("Then: build, run with TRACE_ENABLE=1, and 'callsight analyze traces/'.")
 
 
 def cmd_scan(args):
@@ -162,7 +162,7 @@ def cmd_scan(args):
 
 def cmd_select(args):
     """Explore functions/call subtrees and generate trace.config lines."""
-    from callscope import callgraph
+    from callsight import callgraph
     sources = flags.scan_sources(args.directory)
     if not sources:
         sys.exit(f"no C/C++ sources under {args.directory}")
@@ -181,7 +181,7 @@ def cmd_select(args):
     for seed in args.function:
         if seed not in graph:
             sys.exit(f"'{seed}' not defined in the scanned sources "
-                     f"(try: callscope select {args.directory} --list)")
+                     f"(try: callsight select {args.directory} --list)")
         sub = callgraph.expand(graph, [seed], args.depth)
         files = sorted({f for fn in sub for f in graph[fn]["files"]})
         dstr = "full depth" if args.depth is None else f"depth={args.depth}"
@@ -207,8 +207,8 @@ def cmd_ui(args):
         import uvicorn
     except ImportError:
         sys.exit("the web UI needs the optional dependencies — "
-                 "install with: uv tool install 'callscope[ui]'")
-    from callscope.ui.app import app
+                 "install with: uv tool install 'callsight[ui]'")
+    from callsight.ui.app import app
     uvicorn.run(app, host=args.host, port=args.port)
 
 
@@ -217,8 +217,8 @@ def cmd_serve(args):
         import zstandard  # noqa: F401
     except ImportError:
         sys.exit("the streaming server needs the optional dependencies — "
-                 "install with: uv tool install 'callscope[stream]'")
-    from callscope.serve import serve
+                 "install with: uv tool install 'callsight[stream]'")
+    from callsight.serve import serve
     serve(args.host, args.port, args.out)
 
 
@@ -235,11 +235,11 @@ def main(argv=None):
         return
 
     ap = argparse.ArgumentParser(
-        prog="callscope", description=__doc__,
+        prog="callsight", description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="command", required=True)
 
-    p_init = sub.add_parser("init", help="adopt callscope into a project")
+    p_init = sub.add_parser("init", help="adopt callsight into a project")
     p_init.add_argument("project", help="project root directory")
     p_init.add_argument("--build", choices=("make", "cmake"), default=None,
                         help="build system (default: auto-detect)")
@@ -267,13 +267,13 @@ def main(argv=None):
                        help="list all defined functions")
     p_sel.set_defaults(func=cmd_select)
 
-    p_ui = sub.add_parser("ui", help="start the web UI (needs callscope[ui])")
+    p_ui = sub.add_parser("ui", help="start the web UI (needs callsight[ui])")
     p_ui.add_argument("--host", default="127.0.0.1")
     p_ui.add_argument("--port", type=int, default=8321)
     p_ui.set_defaults(func=cmd_ui)
 
     p_serve = sub.add_parser("serve", help="TCP server for remote trace "
-                                           "streams (needs callscope[stream])")
+                                           "streams (needs callsight[stream])")
     p_serve.add_argument("--host", default="0.0.0.0")
     p_serve.add_argument("--port", type=int, default=9001)
     p_serve.add_argument("--out", default="traces",

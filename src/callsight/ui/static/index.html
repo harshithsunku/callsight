@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>callscope</title>
+<title>callsight</title>
 <style>
   :root { --bg:#0f1419; --panel:#1a2129; --border:#2c3644; --fg:#d5dde6;
           --dim:#8494a5; --accent:#4da3ff; --ok:#4caf7d; --err:#e05c5c; }
@@ -52,7 +52,7 @@
 </style>
 </head>
 <body>
-<header><h1>callscope</h1><span>compile-time function tracing for C/C++</span></header>
+<header><h1>callsight</h1><span>compile-time function tracing for C/C++</span></header>
 <main>
 
 <section>
@@ -146,7 +146,7 @@ async function loadProject() {
     const d = await api("/api/project?path=" + encodeURIComponent(project));
     document.getElementById("projinfo").textContent =
       `${d.sources} sources · build: ${d.build}` +
-      (d.has_callscope_dir ? " · callscope runtime present" : " · run `callscope init` there first") +
+      (d.has_callsight_dir ? " · callsight runtime present" : " · run `callsight init` there first") +
       (d.binaries.length ? ` · binaries: ${d.binaries.join(", ")}` : "");
     if (d.binaries.length) document.getElementById("binary").value = d.binaries[0];
     const c = await api("/api/config?path=" + encodeURIComponent(project));

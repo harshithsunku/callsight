@@ -5,15 +5,15 @@ hide:
 ---
 
 <div class="hero" markdown>
-  <div class="hero-title" markdown># callscope</div>
+  <div class="hero-title" markdown># callsight</div>
   <p class="hero-tag">Compile-time function tracing for C &amp; C++.<br>
   Zero source edits. One config file. From million-line codebases to embedded devices.</p>
   <div class="hero-actions" markdown>
   [Getting started](getting-started.md){ .md-button .md-button--primary }
-  [View on GitHub](https://github.com/harshithsunku/callscope){ .md-button }
+  [View on GitHub](https://github.com/harshithsunku/callsight){ .md-button }
   </div>
   <div class="hero-install" markdown>
-  `uv tool install callscope`
+  `uv tool install callsight`
   </div>
 </div>
 
@@ -21,7 +21,7 @@ hide:
 
 <div class="feature" markdown>
 ### Zero-edit adoption
-`callscope init` drops the runtime into any GCC/Clang project and prints the
+`callsight init` drops the runtime into any GCC/Clang project and prints the
 exact Make/CMake wiring. Not one line of your source changes.
 </div>
 
@@ -45,7 +45,7 @@ and max time per function — `static` functions included.
 
 <div class="feature" markdown>
 ### Web UI
-`callscope ui`: browse a project, edit its config, build, run, and read a
+`callsight ui`: browse a project, edit its config, build, run, and read a
 sortable hotspot report — no root, one uv command.
 </div>
 
@@ -62,7 +62,7 @@ accumulates on the device.
 
 <div class="arch" markdown>
 
-<svg viewBox="0 0 980 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="callscope architecture">
+<svg viewBox="0 0 980 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="callsight architecture">
   <defs>
     <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" class="arch-arrow"/>
@@ -112,11 +112,11 @@ accumulates on the device.
   <!-- server -->
   <text x="860" y="140" class="arch-phase">SERVER</text>
   <rect x="800" y="157" width="150" height="52" rx="8" class="arch-box"/>
-  <text x="875" y="178" class="arch-label">callscope serve</text>
+  <text x="875" y="178" class="arch-label">callsight serve</text>
   <text x="875" y="196" class="arch-sub">trace.stream.*.bin</text>
 
   <rect x="690" y="240" width="260" height="48" rx="8" class="arch-box good"/>
-  <text x="820" y="261" class="arch-label">callscope analyze · web UI</text>
+  <text x="820" y="261" class="arch-label">callsight analyze · web UI</text>
   <text x="820" y="279" class="arch-sub">hotspots · self/inclusive time · threads</text>
 
   <line x1="760" y1="183" x2="796" y2="183" class="arch-line" marker-end="url(#arr)"/>
@@ -130,17 +130,17 @@ accumulates on the device.
 ## Three commands in
 
 ```sh
-uv tool install callscope        # 1 · install
-callscope init /your/project     # 2 · adopt (copies runtime, prints wiring)
+uv tool install callsight        # 1 · install
+callsight init /your/project     # 2 · adopt (copies runtime, prints wiring)
 # build the instrumented profile, then:
-TRACE_ENABLE=1 ./yourapp && callscope analyze traces/ --top 20
+TRACE_ENABLE=1 ./yourapp && callsight analyze traces/ --top 20
 ```
 
 ## Built for constrained targets
 
 ```sh
 # powerful host                        # device
-callscope serve --port 9001            ./trace_stream /tracekit0 10.0.0.5 9001 &
+callsight serve --port 9001            ./trace_stream /tracekit0 10.0.0.5 9001 &
                                        TRACE_ENABLE=1 TRACE_SHM=/tracekit0 ./app
 ```
 

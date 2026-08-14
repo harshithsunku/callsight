@@ -1,15 +1,15 @@
-#ifndef CALLSCOPE_TRACE_SHM_H
-#define CALLSCOPE_TRACE_SHM_H
+#ifndef CALLSIGHT_TRACE_SHM_H
+#define CALLSIGHT_TRACE_SHM_H
 
 /*
- * Shared-memory ring layout and stream wire protocol for callscope
+ * Shared-memory ring layout and stream wire protocol for callsight
  * remote tracing.
  *
  * Device side: the traced process (trace.c, TRACE_SHM=/name) flushes
  * events into a POSIX shared-memory ring instead of files — no disk, no
  * network in the profiled process. A separate client process
  * (trace_stream.c) maps the same ring, ZSTD-compresses event batches and
- * streams them over raw TCP to a callscope server (`callscope serve`).
+ * streams them over raw TCP to a callsight server (`callsight serve`).
  *
  * This header is shared by both sides; the attach helper is static so each
  * program carries its own copy (drop-in design, no link dependency).
@@ -74,7 +74,7 @@ static inline void trace_shm_unlock(trace_shm_header_t *h) {
 }
 
 /*
- * Open or create the ring `name` (POSIX shm name, e.g. "/callscope0") with
+ * Open or create the ring `name` (POSIX shm name, e.g. "/callsight0") with
  * room for `capacity` event bytes. Returns the mapped header, or NULL on
  * failure (caller decides the fallback). If this call creates the segment,
  * it initializes the header; if it already exists, capacity is taken from
@@ -125,7 +125,7 @@ static trace_shm_header_t *trace_shm_attach(const char *name,
     } else if (memcmp(h->magic, TRACE_SHM_MAGIC, sizeof(h->magic)) != 0 ||
                h->version != TRACE_SHM_VERSION) {
         munmap(map, (size_t)st.st_size);
-        fprintf(stderr, "callscope: shm %s has incompatible layout\n", name);
+        fprintf(stderr, "callsight: shm %s has incompatible layout\n", name);
         return NULL;
     }
     return h;
@@ -168,4 +168,4 @@ static inline uint64_t trace_shm_get(trace_shm_header_t *h, void *dst,
     return h->tail + len;
 }
 
-#endif /* CALLSCOPE_TRACE_SHM_H */
+#endif /* CALLSIGHT_TRACE_SHM_H */

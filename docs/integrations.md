@@ -9,8 +9,8 @@ addresses so the analyzer can feed them to `addr2line` directly).
 ## GNU Make
 
 ```make
-CALLSCOPE_DIR ?= callscope
-include $(CALLSCOPE_DIR)/Makefile.callscope
+CALLSIGHT_DIR ?= callsight
+include $(CALLSIGHT_DIR)/Makefile.callsight
 ```
 
 The fragment expects `SRCS`, `BUILDDIR`, `BINDIR`, `TARGET`, `CC`,
@@ -20,25 +20,25 @@ The fragment expects `SRCS`, `BUILDDIR`, `BINDIR`, `TARGET`, `CC`,
 - `TRACE_OBJ` — the runtime object (built without instrumentation)
 
 You then add an `instrument` target linking `$(TRACE_OBJ)` with `-no-pie`
-(the `callscope init` output prints it ready to paste).
+(the `callsight init` output prints it ready to paste).
 
-Overridable variables: `CALLSCOPE_DIR` (where the runtime lives),
-`CALLSCOPE_CONFIG` (default `./trace.config`), `CALLSCOPE` (the command
+Overridable variables: `CALLSIGHT_DIR` (where the runtime lives),
+`CALLSIGHT_CONFIG` (default `./trace.config`), `CALLSIGHT` (the command
 used to generate flags — point it at `python3 .../cli.py` to run from a
 source checkout without installing).
 
 ## CMake
 
 ```cmake
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/callscope")
-include(CallScope)
-callscope_instrument(<target>)
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/callsight")
+include(CallSight)
+callsight_instrument(<target>)
 ```
 
 Normal builds are untouched; instrumentation is opt-in per configure:
 
 ```sh
-cmake -DCALLSCOPE_INSTRUMENT=ON -B build-instr
+cmake -DCALLSIGHT_INSTRUMENT=ON -B build-instr
 cmake --build build-instr
 ```
 
@@ -46,13 +46,13 @@ Cache variables:
 
 | variable | default | meaning |
 |---|---|---|
-| `CALLSCOPE_INSTRUMENT` | `OFF` | apply hooks to `callscope_instrument()` targets |
-| `CALLSCOPE_CONFIG` | `<src>/trace.config` | selection config |
-| `CALLSCOPE_COMMAND` | `callscope` | flag generator; a `;`-list works, e.g. `-D"CALLSCOPE_COMMAND=python3;/path/cli.py"` |
+| `CALLSIGHT_INSTRUMENT` | `OFF` | apply hooks to `callsight_instrument()` targets |
+| `CALLSIGHT_CONFIG` | `<src>/trace.config` | selection config |
+| `CALLSIGHT_COMMAND` | `callsight` | flag generator; a `;`-list works, e.g. `-D"CALLSIGHT_COMMAND=python3;/path/cli.py"` |
 
 !!! note
-    `CALLSCOPE_COMMAND` is a cache variable — pass it with `-D`. A plain
-    `set()` before `include(CallScope)` gets shadowed by the cache
+    `CALLSIGHT_COMMAND` is a cache variable — pass it with `-D`. A plain
+    `set()` before `include(CallSight)` gets shadowed by the cache
     definition (CMP0126).
 
 ## Notes
