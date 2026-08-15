@@ -1,7 +1,9 @@
 """Unit tests for callsight.symbols: function-definition enumeration."""
 
+import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -10,7 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from callsight import symbols
+from callsight import callgraph, symbols
 
 A_C = """\
 #include <stdio.h>
@@ -58,7 +60,13 @@ class TestRegexFallback(SymbolsFixture):
     def run_symbols(self):
         with mock.patch("callsight.provision.find_ctags",
                         return_value=None):
-            return symbols.list_functions(self.dir)
+            return symbols.list_functions(self.dir)["functions"]
+
+    def test_backend_reported(self):
+        with mock.patch("callsight.provision.find_ctags",
+                        return_value=None):
+            result = symbols.list_functions(self.dir)
+        self.assertEqual(result["backend"], "regex")
 
     def test_finds_all_definitions(self):
         by_name = {e["name"]: e for e in self.run_symbols()}
@@ -94,15 +102,46 @@ class TestRegexFallback(SymbolsFixture):
         # fallback.
         with mock.patch("callsight.provision.find_ctags",
                         return_value="/nonexistent/ctags"):
-            entries = symbols.list_functions(self.dir)
+            result = symbols.list_functions(self.dir)
+        self.assertEqual(result["backend"], "regex")
         self.assertIn({"file": "src/a.c", "name": "add", "line": 3,
-                       "static": False}, entries)
+                       "static": False}, result["functions"])
+
+    def test_ctags_bad_lines_skipped(self):
+        # One malformed JSON line must not discard the whole ctags run.
+        good = {"_type": "tag", "path": os.path.join(self.dir, "src/a.c"),
+                "name": "add", "line": 3, "file": True}
+        proc = subprocess.CompletedProcess(
+            args=[], returncode=0,
+            stdout='not json\n' + json.dumps(good) + '\n[1, 2]\n',
+            stderr="")
+        with mock.patch("callsight.provision.find_ctags",
+                        return_value="/fake/ctags"), \
+                mock.patch("subprocess.run", return_value=proc):
+            result = symbols.list_functions(self.dir)
+        self.assertEqual(result["backend"], "ctags")
+        self.assertEqual(result["functions"],
+                         [{"file": os.path.join("src", "a.c"),
+                           "name": "add", "line": 3, "static": True}])
+
+    def test_ctags_all_bad_lines_falls_back(self):
+        proc = subprocess.CompletedProcess(args=[], returncode=0,
+                                           stdout="garbage\n", stderr="")
+        with mock.patch("callsight.provision.find_ctags",
+                        return_value="/fake/ctags"), \
+                mock.patch("subprocess.run", return_value=proc):
+            result = symbols.list_functions(self.dir)
+        self.assertEqual(result["backend"], "regex")
+        self.assertIn({"file": "src/a.c", "name": "add", "line": 3,
+                       "static": False}, result["functions"])
 
 
 @unittest.skipUnless(shutil.which("ctags"), "ctags not installed")
 class TestCtags(SymbolsFixture):
     def test_same_definitions_as_regex(self):
-        entries = symbols.list_functions(self.dir)
+        result = symbols.list_functions(self.dir)
+        self.assertEqual(result["backend"], "ctags")
+        entries = result["functions"]
         by_name = {e["name"]: e for e in entries}
         self.assertEqual(set(by_name), {"add", "helper", "mul", "run"})
         self.assertEqual(by_name["add"],
@@ -116,6 +155,46 @@ class TestCtags(SymbolsFixture):
                           "static": True})
         keys = [(e["file"], e["line"]) for e in entries]
         self.assertEqual(keys, sorted(keys))
+
+
+# Multi-line comment/string BEFORE the definition: line numbers must stay
+# accurate (the strip blanks contents but keeps newlines).
+LEADING_C = """\
+/* a multi-line comment
+   with fake() { inside */
+const char *s = "multi \\
+line string";
+
+int target(void) {
+    return 0;
+}
+"""
+
+# Regression: a multi-line comment between the return type and the name
+# must not hide the definition (the newline-preserving _strip broke this).
+SPLIT_COMMENT_C = """\
+static int /*
+*/ foo(void) {
+    return 1;
+}
+"""
+
+
+class TestFindDefinitions(SymbolsFixture):
+    def defs(self, rel, text):
+        self.write(rel, text)
+        return callgraph.find_definitions(os.path.join(self.dir, rel))
+
+    def test_line_numbers_after_multiline_comment_and_string(self):
+        self.assertEqual(self.defs("src/leading.c", LEADING_C),
+                         [("target", 6, False)])
+
+    def test_comment_between_type_and_name(self):
+        self.assertEqual(self.defs("src/split.c", SPLIT_COMMENT_C),
+                         [("foo", 1, True)])
+        parsed = callgraph.parse_source(os.path.join(self.dir,
+                                                     "src/split.c"))
+        self.assertEqual(parsed, {"foo": []})
 
 
 if __name__ == "__main__":

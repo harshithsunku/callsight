@@ -12,6 +12,7 @@ keeps the regex fallback.
 """
 
 import hashlib
+import http.client
 import os
 import platform
 import shutil
@@ -80,7 +81,8 @@ def download_ctags():
     try:
         data = _fetch(f"{_RELEASES_BASE}/{asset}")
         checksums = _fetch(f"{_RELEASES_BASE}/{asset}.sha256").decode()
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, http.client.HTTPException) as e:
+        # HTTPException: IncompleteRead/BadStatusLine are not OSErrors.
         raise RuntimeError(f"could not download {asset}: {e}") from None
     expected = None
     for line in checksums.splitlines():
@@ -95,18 +97,22 @@ def download_ctags():
         raise RuntimeError(
             f"checksum mismatch for {asset}: expected {expected}, "
             f"got {actual}")
-    os.makedirs(bin_dir(), exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=bin_dir(), prefix="ctags.")
+    tmp = None
     try:
+        os.makedirs(bin_dir(), exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=bin_dir(), prefix="ctags.")
         with os.fdopen(fd, "wb") as f:
             f.write(data)
         os.chmod(tmp, 0o755)
         os.replace(tmp, dest)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+    except BaseException as e:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        if isinstance(e, OSError):
+            raise RuntimeError(f"could not install {asset}: {e}") from None
         raise
     failure = None
     try:
@@ -127,15 +133,26 @@ def download_ctags():
     return dest
 
 
+# Remember a failed download so repeated ensure_ctags() calls (the UI
+# runs one per config-builder scan) don't each stall on a full download
+# timeout when the host is offline.
+_download_failed = False
+
+
 def ensure_ctags():
     """find_ctags(), else try downloading the bundled copy.
 
     Returns the ctags path, or None when nothing is available (caller
-    falls back to the regex parser)."""
+    falls back to the regex parser). A failed download is remembered for
+    the process lifetime and not retried."""
+    global _download_failed
     path = find_ctags()
     if path:
         return path
+    if _download_failed:
+        return None
     try:
         return download_ctags()
     except RuntimeError:
+        _download_failed = True
         return None

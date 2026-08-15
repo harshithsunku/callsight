@@ -1,6 +1,7 @@
 """Unit tests for callsight.provision: bundled-tool provisioning."""
 
 import hashlib
+import http.client
 import os
 import shutil
 import stat
@@ -48,6 +49,9 @@ class HomeFixture(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.bin = os.path.join(self.home, "bin")
         self.ctags = os.path.join(self.bin, "ctags")
+        # ensure_ctags() caches download failures process-wide; reset it.
+        provision._download_failed = False
+        self.addCleanup(setattr, provision, "_download_failed", False)
 
     def write_fake_ctags(self, mode=0o755):
         os.makedirs(self.bin, exist_ok=True)
@@ -95,12 +99,12 @@ class TestAssetName(unittest.TestCase):
 
 
 class TestDownloadCtags(HomeFixture):
-    def fake_urlopen(self, checksums=None):
+    def fake_urlopen(self, checksums=None, binary=FAKE_CTAGS):
         asset = provision.asset_name()
         payloads = {
-            f"/{asset}": FakeResponse(FAKE_CTAGS),
+            f"/{asset}": FakeResponse(binary),
             f"/{asset}.sha256": FakeResponse(
-                sha256_line(asset, FAKE_CTAGS)
+                sha256_line(asset, binary)
                 if checksums is None else checksums),
         }
 
@@ -132,6 +136,15 @@ class TestDownloadCtags(HomeFixture):
                 provision.download_ctags()
         self.assertFalse(os.path.exists(self.ctags))
 
+    def test_malformed_checksum_file(self):
+        # No line for our asset at all.
+        bad = b"deadbeef  callsight-ctags-linux-other\n"
+        with mock.patch("urllib.request.urlopen",
+                        self.fake_urlopen(checksums=bad)):
+            with self.assertRaises(RuntimeError):
+                provision.download_ctags()
+        self.assertFalse(os.path.exists(self.ctags))
+
     def test_network_failure(self):
         def boom(url, timeout=None):
             raise OSError("no network")
@@ -139,6 +152,40 @@ class TestDownloadCtags(HomeFixture):
             with self.assertRaises(RuntimeError):
                 provision.download_ctags()
         self.assertFalse(os.path.exists(self.ctags))
+
+    def test_truncated_download(self):
+        # http.client.IncompleteRead is not an OSError; it must still
+        # surface as the documented RuntimeError, not a traceback.
+        class Truncated(FakeResponse):
+            def read(self):
+                raise http.client.IncompleteRead(b"partial")
+
+        def _urlopen(url, timeout=None):
+            return Truncated(b"")
+        with mock.patch("urllib.request.urlopen", _urlopen):
+            with self.assertRaises(RuntimeError):
+                provision.download_ctags()
+        self.assertFalse(os.path.exists(self.ctags))
+
+    def test_install_oserror(self):
+        with mock.patch("urllib.request.urlopen", self.fake_urlopen()), \
+                mock.patch("os.makedirs",
+                           side_effect=OSError("read-only fs")):
+            with self.assertRaises(RuntimeError):
+                provision.download_ctags()
+        self.assertFalse(os.path.exists(self.ctags))
+
+    def test_smoke_failure_removes_dest(self):
+        # The downloaded "binary" runs but fails --version: it must be
+        # unlinked again and reported as RuntimeError.
+        bogus = b"#!/bin/sh\nexit 1\n"
+        with mock.patch("urllib.request.urlopen",
+                        self.fake_urlopen(binary=bogus)):
+            with self.assertRaises(RuntimeError):
+                provision.download_ctags()
+        self.assertFalse(os.path.exists(self.ctags))
+        if os.path.isdir(self.bin):
+            self.assertEqual(os.listdir(self.bin), [])
 
     def test_unsupported_arch(self):
         with mock.patch("callsight.provision.asset_name",
@@ -163,6 +210,16 @@ class TestEnsureCtags(HomeFixture):
                 mock.patch("callsight.provision.download_ctags",
                            side_effect=RuntimeError("boom")):
             self.assertIsNone(provision.ensure_ctags())
+
+    def test_download_failure_is_cached(self):
+        # A failed download is remembered: later calls return None without
+        # re-attempting (the UI calls ensure_ctags() on every scan).
+        with mock.patch("shutil.which", return_value=None), \
+                mock.patch("callsight.provision.download_ctags",
+                           side_effect=RuntimeError("boom")) as dl:
+            self.assertIsNone(provision.ensure_ctags())
+            self.assertIsNone(provision.ensure_ctags())
+        self.assertEqual(dl.call_count, 1)
 
 
 if __name__ == "__main__":

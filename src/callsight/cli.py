@@ -209,14 +209,22 @@ def cmd_provision(args):
     from callsight import provision
     which = shutil.which("ctags")
     if which and not args.force:
-        print(f"ctags found on PATH: {which}")
+        if _ctags_usable(which):
+            print(f"ctags found on PATH: {which}")
+        else:
+            print(f"ctags on PATH ({which}) does not look like Universal "
+                  f"Ctags (the UI needs --output-format=json); the bundled "
+                  f"copy can be installed with: callsight provision --force")
         return
     bundled = provision.bundled_ctags()
     if not args.force and os.path.isfile(bundled) \
             and os.access(bundled, os.X_OK):
-        print(f"ctags already provisioned: {bundled}")
-        _print_ctags_version(bundled)
-        return
+        if _ctags_usable(bundled):
+            print(f"ctags already provisioned: {bundled}")
+            _print_ctags_version(bundled)
+            return
+        print(f"bundled ctags ({bundled}) failed its smoke test; "
+              f"re-downloading")
     if which:
         print(f"ctags on PATH ({which}); --force: installing bundled copy")
     try:
@@ -227,6 +235,20 @@ def cmd_provision(args):
                  f"everything still works without ctags)")
     print(f"installed {path}")
     _print_ctags_version(path)
+
+
+def _ctags_usable(path):
+    """Smoke-run '<path> --version': a usable ctags exits 0 and mentions
+    Ctags (Exuberant ctags lacks --output-format=json, which the UI's
+    config builder needs)."""
+    import subprocess
+    try:
+        proc = subprocess.run([path, "--version"], capture_output=True,
+                              text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    out = (proc.stdout + proc.stderr).lower()
+    return proc.returncode == 0 and "ctags" in out
 
 
 def _print_ctags_version(path):

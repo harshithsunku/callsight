@@ -19,7 +19,9 @@ otherwise. If your system has no ctags, the first UI scan auto-downloads
 a static universal-ctags into `~/.callsight/bin` (override the location
 with `CALLSIGHT_HOME`); when the download isn't possible (offline,
 unsupported architecture) the regex fallback keeps working silently.
-`callsight provision` performs the same download explicitly.
+`callsight provision` reports the ctags the UI would use and performs the
+same download explicitly — only when no ctags is available (`--force`
+downloads regardless).
 
 ## Adopt a project
 

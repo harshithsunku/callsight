@@ -44,10 +44,15 @@ A visual editor for `trace.config` — no pattern syntax to memorize:
 3. **Per-function actions** — for each selected function choose
    *include-subtree* (expands through the static call graph, like
    `include-func`) or *exclude*.
-4. **Preview** — a dry run of the selection: how many sources would be
-   instrumented vs. excluded with the current choices.
-5. **Apply** — writes the resulting `trace.config` to the project,
+4. **Preview** — writes the generated `trace.config`, then dry-runs the
+   selection against the saved file: how many sources would be
+   instrumented vs. excluded with the current choices. (The write is
+   required — the dry run reads the saved config.)
+5. **Apply** — writes the generated `trace.config` to the project,
    ready for the next instrumented build.
+
+Both buttons ask before overwriting an existing config whose content
+differs.
 
 ## Notes
 

@@ -83,7 +83,7 @@ millions of events per second. The levers, cheapest first:
 | `TRACE_ENABLE` | off | `1` enables collection; hooks are inert otherwise |
 | `TRACE_DIR` | `./traces` | output directory (file mode) |
 | `TRACE_MAX` | `0` (unlimited) | global event cap — always set one for long runs |
-| `TRACE_SHM` | unset | streaming mode: POSIX shm ring name, e.g. `/tracekit0` |
+| `TRACE_SHM` | unset | streaming mode: POSIX shm ring name, e.g. `/callsight0` |
 | `TRACE_SHM_SIZE` | 16 MiB | ring capacity in bytes |
 | `TRACE_THREADS` | unset (all) | comma-separated globs on thread names, e.g. `sort-*` |
 

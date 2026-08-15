@@ -22,8 +22,13 @@ C_KEYWORDS = frozenset("""
 
 _FUNC_DEF_RE = re.compile(
     # return type(s) + name + params + '{'  — start-of-line anchored to
-    # skip calls, which are indented inside another function body
-    r"^[ \t]*[A-Za-z_][\w:\*&<>~\[\], \t]*?"
+    # skip calls, which are indented inside another function body. The
+    # return-type span may cross a newline followed by horizontal
+    # whitespace: after _strip() such a run is a blanked multi-line
+    # comment or __attribute__((...)) between the type and the name (or a
+    # harmlessly split declaration). The trailing '{', and params that
+    # can't contain ';', still keep calls from matching.
+    r"^[ \t]*[A-Za-z_](?:[\w:\*&<>~\[\], \t]|\n[ \t]*)*?"
     r"\b([A-Za-z_]\w*)\s*\(([^;{}]*)\)\s*"
     r"(?:const\s*)?(?:noexcept\s*)?(?:->[^{;]*)?\{",
     re.MULTILINE)

@@ -40,6 +40,8 @@ Layout:
 - `tests/test_select.py` — unit tests for config parsing/selection.
 - `tests/test_symbols.py` — unit tests for `symbols.py` (both strategies).
 - `tests/test_config_generate.py` — unit tests for `flags.render_config`.
+- `tests/test_callgraph.py` — unit tests for `callgraph.py` + include-func selection.
+- `tests/test_provision.py` — unit tests for `provision.py` (mocked downloads).
 - `docs/instrumentation-options.md` — compiler-mechanism survey.
 
 ## Build / test commands

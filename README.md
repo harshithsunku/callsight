@@ -17,9 +17,10 @@ Clang, C and C++, with GNU Make and CMake projects.
 ## Install
 
 ```sh
-uv tool install callsight        # from PyPI; puts `callsight` on your PATH
-uv tool install 'callsight[ui]'  # same, plus the optional web UI
-uv tool install .                # or from a source checkout
+uv tool install callsight           # from PyPI; puts `callsight` on your PATH
+uv tool install 'callsight[ui]'     # same, plus the optional web UI
+uv tool install 'callsight[stream]' # same, plus the streaming server
+uv tool install .                   # or from a source checkout
 ```
 
 (Requires [uv](https://docs.astral.sh/uv/). The tool itself is Python
@@ -35,7 +36,11 @@ A local web app that walks the whole workflow against any project on the
 machine: browse for the project folder, edit its `trace.config`, preview
 the instrumentation selection, build the instrumented profile (Make or
 CMake — CMake is fetched ephemerally via `uvx` if not installed), run the
-binary with tracing enabled, and view the sortable hotspot report. No root
+binary with tracing enabled, and view the sortable hotspot report. A
+second tab, the **config builder**, scans the project folder into
+searchable checkbox panes of files and functions (enumerated with `ctags`
+— auto-downloaded on first scan when the system has none — with a regex
+fallback) and generates the `trace.config` from your picks. No root
 needed; bind address defaults to localhost.
 
 ## Adopt it in your project (2 steps)
@@ -145,13 +150,18 @@ TRACE_ENABLE=1 TRACE_SHM=/callsight0 ./yourapp.instr
 | `callsight flags --config c -- srcs...` | print compiler flags (build integrations use this) |
 | `callsight analyze [traces/] [--exe bin] [--top N]` | hotspot report |
 | `callsight ui [--host H] [--port P]` | web UI (needs `callsight[ui]`) |
+| `callsight provision [--force]` | download the bundled static ctags used by the UI config builder |
 | `callsight serve [--host H] [--port P] [--out dir]` | TCP server for remote streams (needs `callsight[stream]`) |
 
 ## Repo layout
 
 - `src/callsight/` — the tool: `cli.py`, `flags.py` (config → compiler
-  flags), `analyze.py` (offline analyzer); stdlib-only. `src/callsight/ui/`
-  is the optional web UI (FastAPI, only imported by `callsight ui`).
+  flags), `analyze.py` (offline analyzer), `callgraph.py` (static call
+  graph behind `include-func`), `symbols.py` (function enumeration for
+  the config builder), `provision.py` (bundled ctags download); the core
+  is stdlib-only, `serve.py` (streaming TCP server) needs the `stream`
+  extra. `src/callsight/ui/` is the optional web UI (FastAPI, only
+  imported by `callsight ui`).
 - `src/callsight/runtime/` — `trace.c`/`trace.h`/`trace_shm.h`, the hook
   runtime copied into adopted projects. Self-contained C, no deps beyond
   pthreads.

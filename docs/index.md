@@ -51,9 +51,10 @@ full? Events are dropped and counted — the workload **never stalls**.
 <div class="feature" markdown>
 <span class="feature-icon">💻</span>
 ### Web UI
-`callsight ui`: a visual config builder with call-subtree selection,
-one-click instrumented builds, traced runs, and a sortable hotspot
-report — no root, one uv command.
+`callsight ui` (install the extra: `uv tool install 'callsight[ui]'`):
+a visual config builder with call-subtree selection, one-click
+instrumented builds, traced runs, and a sortable hotspot report — no
+root, one uv command.
 </div>
 
 <div class="feature" markdown>
@@ -189,8 +190,8 @@ opt-in per configure.
     # analysis host                        # device (after init --stream)
     uv tool install 'callsight[stream]'    cc -O2 -o callsight/trace_stream \
     callsight serve --port 9001 \              callsight/trace_stream.c callsight/zstd.c
-        --out traces/                      ./callsight/trace_stream /tracekit0 <host-ip> 9001 &
-                                           TRACE_ENABLE=1 TRACE_SHM=/tracekit0 ./app.instr
+        --out traces/                      ./callsight/trace_stream /callsight0 <host-ip> 9001 &
+                                           TRACE_ENABLE=1 TRACE_SHM=/callsight0 ./app.instr
     ```
 
 A clean run reports `unmatched_exits=0`. On constrained targets the

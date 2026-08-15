@@ -12,8 +12,12 @@ candidates. Two strategies:
   - the heuristic regex parser from callgraph.py as fallback — static is
     detected from a `static` keyword before the function name.
 
-Any ctags failure (nonzero exit, unparseable output) falls back silently
-to the regex path; the result is best-effort either way.
+Any ctags failure (nonzero exit, wholly unparseable output) falls back
+silently to the regex path; individually malformed output lines are
+skipped. list_functions reports which strategy produced the result:
+
+    {"functions": [{"file", "name", "line", "static"}, ...],
+     "backend": "ctags" | "regex"}
 """
 
 import json
@@ -22,7 +26,8 @@ import subprocess
 
 from callsight import callgraph, flags, provision
 
-# One ctags invocation covers the whole project; abort if it hangs.
+# One ctags invocation covers the whole project; abort if it hangs. The
+# timeout scales with the source count so big projects get more headroom.
 _CTAGS_TIMEOUT = 60
 
 
@@ -30,27 +35,33 @@ def _ctags_definitions(ctags, sources):
     """Run ctags with JSON output over sources.
 
     Return [{"path", "name", "line", "static"}] entries, or None on any
-    failure so the caller can fall back to the regex parser."""
+    failure so the caller can fall back to the regex parser. Malformed
+    output lines are skipped individually; if nothing parses at all the
+    output is treated as garbage and None is returned."""
     try:
         proc = subprocess.run(
             [ctags, "--output-format=json", "--sort=no",
              "--kinds-C=f", "--kinds-C++=f", "--fields=+n",
              "--extras=-q", "-f", "-"] + sources,
-            capture_output=True, text=True, timeout=_CTAGS_TIMEOUT)
+            capture_output=True, text=True,
+            timeout=max(_CTAGS_TIMEOUT, len(sources)))
     except (OSError, subprocess.TimeoutExpired):
         return None
     if proc.returncode != 0:
         return None
     entries = []
-    try:
-        for line in proc.stdout.splitlines():
+    skipped = 0
+    for line in proc.stdout.splitlines():
+        try:
             tag = json.loads(line)
             if tag.get("_type") != "tag":
                 continue
             entries.append({"path": tag["path"], "name": tag["name"],
                             "line": int(tag["line"]),
                             "static": bool(tag.get("file"))})
-    except (KeyError, TypeError, ValueError):
+        except (AttributeError, KeyError, TypeError, ValueError):
+            skipped += 1
+    if skipped and not entries:
         return None
     return entries
 
@@ -70,22 +81,27 @@ def _regex_definitions(sources):
 
 
 def list_functions(project_dir):
-    """One entry per function definition in the project:
+    """Enumerate the project's function definitions; returns
 
-        {"file": <path relative to project_dir>, "name": <str>,
-         "line": <int>, "static": <bool>}
+        {"functions": [{"file": <path relative to project_dir>,
+                        "name": <str>, "line": <int>, "static": <bool>}],
+         "backend": "ctags" | "regex"}
 
-    sorted by (file, line). Sources come from flags.scan_sources, so the
-    usual skip rules (VCS dirs, venv, build dirs) apply."""
+    one entry per definition, sorted by (file, line); "backend" says which
+    strategy produced the result. Sources come from flags.scan_sources, so
+    the usual skip rules (VCS dirs, venv, build dirs) apply."""
     root = os.path.abspath(project_dir)
     sources = sorted(os.path.abspath(p) for p in flags.scan_sources(root))
     entries = None
+    backend = "regex"
     ctags = provision.find_ctags()
     if ctags:
         entries = _ctags_definitions(ctags, sources)
+        if entries is not None:
+            backend = "ctags"
     if entries is None:
         entries = _regex_definitions(sources)
     out = [{"file": os.path.relpath(e["path"], root), "name": e["name"],
             "line": e["line"], "static": e["static"]} for e in entries]
     out.sort(key=lambda e: (e["file"], e["line"]))
-    return out
+    return {"functions": out, "backend": backend}

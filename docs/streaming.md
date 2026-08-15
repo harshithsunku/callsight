@@ -76,6 +76,7 @@ event storage:
 | `head` | `u64` | monotonic write offset (bytes) |
 | `tail` | `u64` | monotonic read offset (bytes) |
 | `dropped` | `u64` | events dropped (ring was full) |
+| `_pad` | `u8[16]` | reserved padding — the header is 64 bytes |
 
 `head`/`tail` are monotonic byte counters; bytes in use = `head - tail`.
 
@@ -102,8 +103,8 @@ callsight init --stream /path/to/project   # adds trace_stream.c + zstd.c
 
 # on the device:
 cc -O2 -o callsight/trace_stream callsight/trace_stream.c callsight/zstd.c
-./callsight/trace_stream /tracekit0 <server-ip> 9001 &
-TRACE_ENABLE=1 TRACE_SHM=/tracekit0 ./yourapp.instr
+./callsight/trace_stream /callsight0 <server-ip> 9001 &
+TRACE_ENABLE=1 TRACE_SHM=/callsight0 ./yourapp.instr
 ```
 
 The client exits once the traced process detaches and the ring is

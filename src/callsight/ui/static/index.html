@@ -161,8 +161,8 @@
       <div class="pane-head">
         <span class="title" id="cb-files-title"></span>
         <input type="text" id="cb-file-filter" placeholder="filter files" oninput="renderFilesPane()">
-        <button class="ghost mini" onclick="cbFilesAll(true)">All</button>
-        <button class="ghost mini" onclick="cbFilesAll(false)">None</button>
+        <button class="ghost mini" id="cb-files-all" onclick="cbFilesAll(true)">All</button>
+        <button class="ghost mini" id="cb-files-none" onclick="cbFilesAll(false)">None</button>
       </div>
       <div class="pane-body" id="cb-files"></div>
     </div>
@@ -170,9 +170,9 @@
       <div class="pane-head">
         <span class="title" id="cb-funcs-title"></span>
         <input type="text" id="cb-func-filter" placeholder="filter functions" oninput="renderFuncsPane()">
-        <button class="ghost mini" onclick="cbBulk('include')">Include subtree</button>
-        <button class="ghost mini" onclick="cbBulk('exclude')">Exclude</button>
-        <button class="ghost mini" onclick="cbBulk('clear')">Clear</button>
+        <button class="ghost mini" id="cb-bulk-include" onclick="cbBulk('include')">Include subtree</button>
+        <button class="ghost mini" id="cb-bulk-exclude" onclick="cbBulk('exclude')">Exclude</button>
+        <button class="ghost mini" id="cb-bulk-clear" onclick="cbBulk('clear')">Clear</button>
         <label class="dim" style="font-size:11px">depth <input type="number" id="cb-depth" min="0" placeholder="full"></label>
       </div>
       <div class="pane-body" id="cb-funcs"></div>
@@ -191,7 +191,7 @@
     Both buttons write trace.config: Preview saves the generated config and
     dry-runs the selection against it (the dry run reads the saved file);
     Apply saves it and loads the text into the Workflow tab's editor for
-    review, asking before overwriting an existing config.
+    review. Both ask before overwriting a differing existing config.
   </div>
 </section>
 </div>
@@ -230,27 +230,41 @@ async function browse(path, paneId, inputId) {
     const d = await api("/api/browse?path=" + encodeURIComponent(path));
     document.getElementById(inputId).value = d.path;
     const div = document.getElementById(paneId);
-    let html = `<a onclick="browse('${d.parent}','${paneId}','${inputId}')">.. (up)</a> `;
+    div.textContent = "";
+    const sep = () => div.appendChild(document.createTextNode(" "));
+    const link = (target, label) => {
+      const a = document.createElement("a");
+      a.textContent = label;
+      a.addEventListener("click", () => browse(target, paneId, inputId));
+      div.appendChild(a);
+    };
+    const badge = (text) => {
+      const s = document.createElement("span");
+      s.className = "badge"; s.textContent = text;
+      div.appendChild(s);
+    };
+    link(d.parent, ".. (up)"); sep();
     for (const e of d.entries) {
-      const badges = (e.has_makefile ? '<span class="badge">make</span>' : "")
-                   + (e.has_cmake ? '<span class="badge">cmake</span>' : "");
-      html += `<a onclick="browse('${d.path}/${e.name}','${paneId}','${inputId}')">${e.name}/</a>${badges} `;
+      link(d.path + "/" + e.name, e.name + "/");
+      if (e.has_makefile) badge("make");
+      if (e.has_cmake) badge("cmake");
+      sep();
     }
-    div.innerHTML = html;
   } catch (e) { setStatus(e.message, "err"); }
 }
 
 async function loadProject(inputId) {
-  project = curPath(inputId);
+  const path = curPath(inputId);
   try {
-    const d = await api("/api/project?path=" + encodeURIComponent(project));
+    const d = await api("/api/project?path=" + encodeURIComponent(path));
+    project = path;
     document.getElementById("path").value = project;
     document.getElementById("cb-path").value = project;
     document.getElementById("projinfo").textContent =
       `${d.sources} sources · build: ${d.build}` +
       (d.has_callsight_dir ? " · callsight runtime present" : " · run `callsight init` there first") +
       (d.binaries.length ? ` · binaries: ${d.binaries.join(", ")}` : "");
-    if (d.binaries.length) document.getElementById("binary").value = d.binaries[0];
+    document.getElementById("binary").value = d.binaries.length ? d.binaries[0] : "";
     const c = await api("/api/config?path=" + encodeURIComponent(project));
     document.getElementById("config").value = c.content;
     cbReset();
@@ -321,7 +335,9 @@ async function runTarget() {
         trace_max: +document.getElementById("trace_max").value,
         timeout: +document.getElementById("timeout").value})});
     showLog(d.output);
-    setStatus(`run finished · ${d.trace_files} trace files`, "ok");
+    setStatus(d.ok ? `run finished · ${d.trace_files} trace files`
+                   : `run failed or timed out · ${d.trace_files} trace files`,
+              d.ok ? "ok" : "err");
   } catch (e) { setStatus(e.message, "err"); }
 }
 
@@ -335,7 +351,7 @@ function renderTable() {
   for (const r of [...rows].sort((a,b) => b[sortKey]-a[sortKey]).slice(0, 50)) {
     html += `<tr><td>${r.calls}</td><td>${r.incl_ms.toFixed(3)}</td>` +
             `<td>${r.self_ms.toFixed(3)}</td><td>${r.max_ms.toFixed(3)}</td>` +
-            `<td class="l">${r.function} <span class="dim">${r.location}</span></td></tr>`;
+            `<td class="l">${esc(r.function)} <span class="dim">${esc(r.location)}</span></td></tr>`;
   }
   html += "</table>";
   document.getElementById("report").innerHTML = html;
@@ -361,7 +377,8 @@ async function analyzeReport() {
 <script>
 /* ---- Config Builder tab ----
    Pick files/functions, render trace.config text via /api/config/generate,
-   then Preview (dry-run) or Apply (write). Shares the `project` global. */
+   then Preview (write + dry-run) or Apply (write). Shares the `project`
+   global. */
 let scanFiles = [];              // [{file, functions:[{name,line,static}]}]
 const cbExcludedFiles = new Set();  // unchecked file rows
 const cbCheckedFuncs = new Set();   // checked function rows (by name)
@@ -426,6 +443,9 @@ function renderFilesPane() {
   }
   document.getElementById("cb-files").innerHTML =
     html || '<div class="cb-row dim">no matches</div>';
+  const suffix = q ? " (filtered)" : "";
+  document.getElementById("cb-files-all").textContent = "All" + suffix;
+  document.getElementById("cb-files-none").textContent = "None" + suffix;
   cbFilesTitle();
 }
 
@@ -475,6 +495,10 @@ function renderFuncsPane() {
     `Functions (${all})` +
     (includePicks.size ? ` · ${includePicks.size} subtree` : "") +
     (excludePicks.size ? ` · ${excludePicks.size} excluded` : "");
+  const suffix = q ? " (filtered)" : "";
+  document.getElementById("cb-bulk-include").textContent = "Include subtree" + suffix;
+  document.getElementById("cb-bulk-exclude").textContent = "Exclude" + suffix;
+  document.getElementById("cb-bulk-clear").textContent = "Clear" + suffix;
 }
 
 function cbToggleFunc(name, checked) {
@@ -486,7 +510,8 @@ function cbToggleFunc(name, checked) {
 function cbBulk(action) {
   const q = document.getElementById("cb-func-filter").value.toLowerCase();
   const raw = document.getElementById("cb-depth").value;
-  const depth = raw === "" ? null : parseInt(raw, 10);
+  const d = raw === "" ? null : parseInt(raw, 10);
+  const depth = Number.isNaN(d) ? null : d;
   let n = 0;
   for (const name of [...cbCheckedFuncs]) {
     if (q && !name.toLowerCase().includes(q)) continue;
@@ -522,12 +547,24 @@ async function cbWrite(content) {
 }
 
 /* Preview is destructive by design: /api/scan dry-runs the SAVED config,
-   so the generated text is written first (noted above the buttons). */
+   so the generated text is written first (noted above the buttons). Both
+   Preview and Apply confirm before overwriting differing content. */
+async function cbWriteConfirmed(content) {
+  const cur = await api("/api/config?path=" + encodeURIComponent(project));
+  if (cur.exists && cur.content !== content &&
+      !confirm("trace.config already exists — overwrite it?")) {
+    cbStatus("kept existing trace.config");
+    return false;
+  }
+  await cbWrite(content);
+  return true;
+}
+
 async function cbPreview() {
   if (!project) { cbStatus("open a project first", "err"); return; }
   try {
     const g = await cbGenerate();
-    await cbWrite(g.content);
+    if (!await cbWriteConfirmed(g.content)) return;
     const d = await api("/api/scan?path=" + encodeURIComponent(project));
     cbStatus(`trace.config written · ${d.total} sources: ${d.instrumented} instrumented, ` +
       `${d.excluded.length} excluded` +
@@ -540,13 +577,7 @@ async function cbApply() {
   if (!project) { cbStatus("open a project first", "err"); return; }
   try {
     const g = await cbGenerate();
-    const cur = await api("/api/config?path=" + encodeURIComponent(project));
-    if (cur.exists && cur.content !== g.content &&
-        !confirm("trace.config already exists — overwrite it?")) {
-      cbStatus("kept existing trace.config");
-      return;
-    }
-    await cbWrite(g.content);
+    if (!await cbWriteConfirmed(g.content)) return;
     cbStatus("trace.config written", "ok");
   } catch (e) { cbStatus(e.message, "err"); }
 }

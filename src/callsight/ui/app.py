@@ -13,9 +13,9 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from callsight import analyze, cli, flags, provision, symbols
 
@@ -40,12 +40,14 @@ def run_cmd(cmd, cwd, timeout, env=None):
         return proc.returncode == 0, (proc.stdout + proc.stderr).strip()
     except subprocess.TimeoutExpired:
         return False, f"timed out after {timeout}s"
+    except OSError as e:
+        return False, str(e)
 
 
 def callsight_cmd():
     """How to invoke the callsight CLI from build integrations."""
     exe = shutil.which("callsight")
-    return exe if exe else f"{sys.executable} -m callsight.cli"
+    return [exe] if exe else [sys.executable, "-m", "callsight.cli"]
 
 
 def cmake_cmd():
@@ -75,13 +77,16 @@ def index():
 def browse(path: str = "/"):
     p = project_path(path)
     entries = []
-    for child in sorted(p.iterdir()):
-        if child.is_dir() and not child.name.startswith("."):
-            entries.append({
-                "name": child.name,
-                "has_makefile": (child / "Makefile").exists(),
-                "has_cmake": (child / "CMakeLists.txt").exists(),
-            })
+    try:
+        for child in sorted(p.iterdir()):
+            if child.is_dir() and not child.name.startswith("."):
+                entries.append({
+                    "name": child.name,
+                    "has_makefile": (child / "Makefile").exists(),
+                    "has_cmake": (child / "CMakeLists.txt").exists(),
+                })
+    except OSError as e:
+        raise HTTPException(400, str(e))
     return {"path": str(p), "parent": str(p.parent), "entries": entries}
 
 
@@ -104,7 +109,11 @@ def get_config(path: str):
     p = project_path(path) / "trace.config"
     if not p.exists():
         return {"exists": False, "content": cli.CONFIG_TEMPLATE}
-    return {"exists": True, "content": p.read_text()}
+    try:
+        content = p.read_text()
+    except UnicodeDecodeError:
+        raise HTTPException(400, f"{p}: not a UTF-8 text file")
+    return {"exists": True, "content": content}
 
 
 class ConfigBody(BaseModel):
@@ -126,7 +135,8 @@ def list_functions(path: str):
     # Auto-provision: first scan downloads the bundled static ctags when
     # the system has none; failures fall back to the regex parser.
     ctags = provision.ensure_ctags()
-    entries = symbols.list_functions(str(p))
+    result = symbols.list_functions(str(p))
+    entries = result["functions"]
     files, by_file = [], {}
     for e in entries:
         grp = by_file.get(e["file"])
@@ -142,13 +152,13 @@ def list_functions(path: str):
             os.path.abspath(provision.bundled_ctags()) else "path"
     return {"files": files, "total_files": len(files),
             "total_functions": len(entries),
-            "backend": "ctags" if ctags else "regex",
+            "backend": result["backend"],
             "ctags": {"source": source}}
 
 
 class IncludeFunc(BaseModel):
     name: str
-    depth: Optional[int] = None
+    depth: Optional[int] = Field(None, ge=0)
 
 
 class GenerateBody(BaseModel):
@@ -164,15 +174,19 @@ def generate_config(body: GenerateBody):
 
     Returns the text only; writing happens via POST /api/config."""
     project_path(body.path)
-    content = flags.render_config(
-        excluded_files=body.excluded_files,
-        include_funcs=[(f.name, f.depth) for f in body.include_funcs],
-        excluded_funcs=body.excluded_funcs)
+    try:
+        content = flags.render_config(
+            excluded_files=body.excluded_files,
+            include_funcs=[(f.name, f.depth) for f in body.include_funcs],
+            excluded_funcs=body.excluded_funcs)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return {"content": content}
 
 
 @app.get("/api/subtree")
-def subtree(path: str, function: str, depth: int = None):
+def subtree(path: str, function: str,
+            depth: Optional[int] = Query(None, ge=0)):
     """Resolve a function's call subtree for the config editor."""
     from callsight import callgraph
     p = project_path(path)
@@ -194,17 +208,19 @@ def scan(path: str):
     if not config.exists():
         raise HTTPException(400, "no trace.config — save one first")
     sources = flags.scan_sources(p)
-    includes, excludes, funcs, include_funcs = flags.parse_config(config)
-    if include_funcs:
-        try:
+    try:
+        includes, excludes, funcs, include_funcs = flags.parse_config(config)
+        if include_funcs:
             selected, dropped, auto_funcs, reachable, warnings = \
                 flags.function_selection(include_funcs, sources, includes,
                                          excludes)
-        except SystemExit as e:
-            raise HTTPException(400, str(e))
-        return {"total": len(sources), "instrumented": len(selected),
-                "excluded": dropped, "subtree": sorted(reachable),
-                "warnings": warnings}
+            return {"total": len(sources), "instrumented": len(selected),
+                    "excluded": dropped, "subtree": sorted(reachable),
+                    "warnings": warnings}
+    except SystemExit as e:
+        raise HTTPException(400, str(e))
+    except UnicodeDecodeError:
+        raise HTTPException(400, f"{config}: not a UTF-8 text file")
     selected, dropped = flags.select(sources, includes, excludes)
     return {"total": len(sources), "instrumented": len(selected),
             "excluded": dropped}
@@ -213,26 +229,24 @@ def scan(path: str):
 class BuildBody(BaseModel):
     path: str
     callsight: str = ""   # override for the CALLSIGHT make variable
-    timeout: int = 300
+    timeout: int = Field(300, ge=1, le=3600)
 
 
 @app.post("/api/build")
 def build(body: BuildBody):
     p = project_path(body.path)
-    tk = body.callsight or callsight_cmd()
+    tk = body.callsight.split() if body.callsight else callsight_cmd()
     logs = []
     if (p / "Makefile").exists():
-        ok, out = run_cmd(["make", "instrument", f"CALLSIGHT={tk}"], p,
-                          body.timeout)
+        ok, out = run_cmd(["make", "instrument",
+                           f"CALLSIGHT={' '.join(tk)}"], p, body.timeout)
         logs.append(f"$ make instrument\n{out}")
     elif (p / "CMakeLists.txt").exists():
         cmake = cmake_cmd()
-        tk_list = tk.split(" ", 1)
-        cmd = tk_list[0] if len(tk_list) == 1 else ";".join(tk_list)
         ok1, out1 = run_cmd(
             cmake + ["-DCALLSIGHT_INSTRUMENT=ON",
-                     f"-DCALLSIGHT_COMMAND={cmd}", "-B", "build-instr"],
-            p, body.timeout)
+                     f"-DCALLSIGHT_COMMAND={';'.join(tk)}", "-B",
+                     "build-instr"], p, body.timeout)
         logs.append(f"$ {' '.join(cmake)} configure\n{out1}")
         ok = ok1
         if ok1:
@@ -248,8 +262,8 @@ def build(body: BuildBody):
 class RunBody(BaseModel):
     path: str
     binary: str
-    trace_max: int = 1000000
-    timeout: int = 30
+    trace_max: int = Field(1000000, ge=0)
+    timeout: int = Field(30, ge=1, le=3600)
 
 
 @app.post("/api/run")
@@ -268,7 +282,7 @@ def run(body: RunBody):
 
 
 @app.get("/api/analyze")
-def analyze_traces(path: str, binary: str, top: int = 50):
+def analyze_traces(path: str, binary: str, top: int = Query(50, ge=0)):
     p = project_path(path)
     binary = (p / binary).resolve()
     if not binary.is_file() or p not in binary.parents:
