@@ -68,10 +68,11 @@ jobs:
           export PKG_CONFIG_PATH="$PWD/../jansson-static/lib/pkgconfig"
           HOST=""; [ -n "$CROSS" ] && HOST="--host=$CROSS"
           # Disable optional libs (xml pulls libxml2→ICU, which breaks
-          # static linking; iconv fails to cross-detect). JSON stays on
+          # static linking; iconv fails to cross-detect; pcre2 leaks in
+          # via the host's pkg-config on cross builds). JSON stays on
           # via the static jansson built above.
           ./configure $HOST --disable-xml --disable-iconv \
-            --disable-seccomp --disable-yaml
+            --disable-seccomp --disable-yaml --disable-pcre2
           make -j"$(nproc)" LDFLAGS="-static"
           ${CROSS:+$CROSS-}strip ctags
 

@@ -1,6 +1,6 @@
 [project]
 name = "callsight"
-version = "0.2.0"
+version = "0.2.1"
 description = "Compile-time function tracing for C/C++ projects: selective -finstrument-functions coverage from one config file, zero source edits."
 readme = "README.md"
 requires-python = ">=3.9"
