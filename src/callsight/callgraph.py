@@ -41,11 +41,17 @@ _STRIP_RE = re.compile(
 _ATTR_RE = re.compile(r"__attribute__\s*\(\([^()]*\)\)")
 
 
+def _blank(m):
+    # Replace everything but newlines so offsets AND line numbers survive.
+    return re.sub(r"[^\n]", " ", m.group(0))
+
+
 def _strip(text):
     """Blank out comments, literals and __attribute__((...)) specifiers
-    (offset-preserving) so they can't confuse the structure scan."""
-    text = _ATTR_RE.sub(lambda m: " " * len(m.group(0)), text)
-    return _STRIP_RE.sub(lambda m: " " * len(m.group(0)), text)
+    (offset- and line-preserving) so they can't confuse the structure
+    scan."""
+    text = _ATTR_RE.sub(_blank, text)
+    return _STRIP_RE.sub(_blank, text)
 
 
 def _body_span(text, open_brace):
@@ -60,6 +66,28 @@ def _body_span(text, open_brace):
             if depth == 0:
                 return open_brace + 1, i
     return open_brace + 1, len(text)  # unbalanced: take the rest
+
+
+_STATIC_RE = re.compile(r"\bstatic\b")
+
+
+def find_definitions(path):
+    """Return [(name, line, static)] for each function definition in path.
+
+    Same heuristic scan as parse_source, so the same limitations apply;
+    `static` comes from a `static` keyword before the function name on the
+    definition line."""
+    with open(path, errors="replace") as f:
+        text = _strip(f.read())
+    defs = []
+    for m in _FUNC_DEF_RE.finditer(text):
+        name = m.group(1)
+        if name in C_KEYWORDS:
+            continue
+        line = text.count("\n", 0, m.start()) + 1
+        prefix = text[m.start():m.start(1)]
+        defs.append((name, line, bool(_STATIC_RE.search(prefix))))
+    return defs
 
 
 def parse_source(path):

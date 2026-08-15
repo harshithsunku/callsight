@@ -11,12 +11,13 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from callsight import analyze, cli, flags
+from callsight import analyze, cli, flags, provision, symbols
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -116,6 +117,58 @@ def save_config(body: ConfigBody):
     p = project_path(body.path) / "trace.config"
     p.write_text(body.content)
     return {"ok": True}
+
+
+@app.get("/api/functions")
+def list_functions(path: str):
+    """Function definitions grouped by file, for the config builder."""
+    p = project_path(path)
+    # Auto-provision: first scan downloads the bundled static ctags when
+    # the system has none; failures fall back to the regex parser.
+    ctags = provision.ensure_ctags()
+    entries = symbols.list_functions(str(p))
+    files, by_file = [], {}
+    for e in entries:
+        grp = by_file.get(e["file"])
+        if grp is None:
+            grp = {"file": e["file"], "functions": []}
+            by_file[e["file"]] = grp
+            files.append(grp)
+        grp["functions"].append({"name": e["name"], "line": e["line"],
+                                 "static": e["static"]})
+    source = None
+    if ctags:
+        source = "bundled" if os.path.abspath(ctags) == \
+            os.path.abspath(provision.bundled_ctags()) else "path"
+    return {"files": files, "total_files": len(files),
+            "total_functions": len(entries),
+            "backend": "ctags" if ctags else "regex",
+            "ctags": {"source": source}}
+
+
+class IncludeFunc(BaseModel):
+    name: str
+    depth: Optional[int] = None
+
+
+class GenerateBody(BaseModel):
+    path: str
+    excluded_files: list[str] = []
+    include_funcs: list[IncludeFunc] = []
+    excluded_funcs: list[str] = []
+
+
+@app.post("/api/config/generate")
+def generate_config(body: GenerateBody):
+    """Render trace.config text from config-builder selections.
+
+    Returns the text only; writing happens via POST /api/config."""
+    project_path(body.path)
+    content = flags.render_config(
+        excluded_files=body.excluded_files,
+        include_funcs=[(f.name, f.depth) for f in body.include_funcs],
+        excluded_funcs=body.excluded_funcs)
+    return {"content": content}
 
 
 @app.get("/api/subtree")
