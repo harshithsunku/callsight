@@ -67,7 +67,11 @@ jobs:
           cd "universal-ctags-${CTAGS_VER}"
           export PKG_CONFIG_PATH="$PWD/../jansson-static/lib/pkgconfig"
           HOST=""; [ -n "$CROSS" ] && HOST="--host=$CROSS"
-          ./configure $HOST
+          # Disable optional libs (xml pulls libxml2→ICU, which breaks
+          # static linking; iconv fails to cross-detect). JSON stays on
+          # via the static jansson built above.
+          ./configure $HOST --disable-xml --disable-iconv \
+            --disable-seccomp --disable-yaml
           make -j"$(nproc)" LDFLAGS="-static"
           ${CROSS:+$CROSS-}strip ctags
 
