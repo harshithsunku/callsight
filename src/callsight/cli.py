@@ -7,9 +7,11 @@ Subcommands:
   scan     show which sources a trace.config would instrument
   flags    print compiler flags (used by Make/CMake integrations)
   analyze  offline hotspot report from a traces/ directory
+  provision  download the bundled static ctags into $CALLSIGHT_HOME/bin
 """
 
 import argparse
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -202,6 +204,42 @@ def cmd_select(args):
         print(f'TRACE_THREADS="{args.threads}" TRACE_ENABLE=1 ./yourapp')
 
 
+def cmd_provision(args):
+    """Show where ctags comes from, or download the bundled static copy."""
+    from callsight import provision
+    which = shutil.which("ctags")
+    if which and not args.force:
+        print(f"ctags found on PATH: {which}")
+        return
+    bundled = provision.bundled_ctags()
+    if not args.force and os.path.isfile(bundled) \
+            and os.access(bundled, os.X_OK):
+        print(f"ctags already provisioned: {bundled}")
+        _print_ctags_version(bundled)
+        return
+    if which:
+        print(f"ctags on PATH ({which}); --force: installing bundled copy")
+    try:
+        path = provision.download_ctags()
+    except RuntimeError as e:
+        sys.exit(f"provision failed: {e}\n"
+                 f"(the UI falls back to the built-in regex parser — "
+                 f"everything still works without ctags)")
+    print(f"installed {path}")
+    _print_ctags_version(path)
+
+
+def _print_ctags_version(path):
+    import subprocess
+    try:
+        proc = subprocess.run([path, "--version"], capture_output=True,
+                              text=True, timeout=30)
+        first = (proc.stdout or proc.stderr).splitlines()[0]
+        print(first)
+    except (OSError, subprocess.TimeoutExpired, IndexError):
+        pass
+
+
 def cmd_ui(args):
     try:
         import uvicorn
@@ -283,6 +321,14 @@ def main(argv=None):
     p_ui.add_argument("--host", default="127.0.0.1")
     p_ui.add_argument("--port", type=int, default=8321)
     p_ui.set_defaults(func=cmd_ui)
+
+    p_prov = sub.add_parser("provision", help="download the bundled static "
+                                              "ctags used by the UI config "
+                                              "builder")
+    p_prov.add_argument("--force", action="store_true",
+                        help="install the bundled copy even when a ctags "
+                             "is already available")
+    p_prov.set_defaults(func=cmd_provision)
 
     p_serve = sub.add_parser("serve", help="TCP server for remote trace "
                                            "streams (needs callsight[stream])")

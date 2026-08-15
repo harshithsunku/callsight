@@ -10,10 +10,18 @@ with zero source edits, controlled by a single `trace.config`.
 Layout:
 
 - `src/callsight/` — the Python package (stdlib-only core): `cli.py` (init /
-  scan / flags / analyze / ui), `flags.py`, `analyze.py`.
-- `src/callsight/ui/` — optional web UI (FastAPI + single-page frontend in
-  `static/`); third-party deps live in the `ui` extra, imported only by
-  `callsight ui`.
+  scan / flags / analyze / ui), `flags.py` (selection + `render_config`),
+  `analyze.py`, `symbols.py` (function enumeration for the UI config
+  builder: ctags when on PATH, `callgraph.find_definitions` regex fallback).
+- `src/callsight/provision.py` — stdlib-only; downloads the bundled static
+  ctags (release assets `callsight-ctags-linux-<arch>` + `.sha256`) into
+  `$CALLSIGHT_HOME/bin` (default `~/.callsight/bin`); `find_ctags()` checks
+  PATH first, then the bundled copy.
+- `src/callsight/ui/` — optional web UI (FastAPI + tabbed single-page
+  frontend in `static/`: "Workflow" = build/run/analyze, "Config Builder" =
+  folder scan → checkbox selection → generates `trace.config` via
+  `/api/functions` + `/api/config/generate`); third-party deps live in the
+  `ui` extra, imported only by `callsight ui`.
 - `src/callsight/runtime/` — `trace.c` / `trace.h` / `trace_shm.h`: the hook
   runtime and shared-memory ring protocol. Self-contained; must stay free
   of project-specific dependencies.
@@ -30,6 +38,8 @@ Layout:
 - `tests/matrixlab/` — demo C11/pthreads workload; the end-to-end fixture.
 - `tests/cmake_demo/` — minimal CMake integration fixture.
 - `tests/test_select.py` — unit tests for config parsing/selection.
+- `tests/test_symbols.py` — unit tests for `symbols.py` (both strategies).
+- `tests/test_config_generate.py` — unit tests for `flags.render_config`.
 - `docs/instrumentation-options.md` — compiler-mechanism survey.
 
 ## Build / test commands
@@ -83,7 +93,8 @@ hotspots (cmake_demo must show only `fib` — `mix` is excluded).
 - C: C11, `-Wall -Wextra -pedantic`; match the existing comment style
   (short `/* ... */` above each function).
 - Python: stdlib only in the core package (`cli.py`, `flags.py`,
-  `analyze.py`). Third-party deps are allowed only in the optional extras —
+  `analyze.py`, `symbols.py`). Third-party deps are allowed only in the
+  optional extras —
   `ui` (FastAPI/uvicorn, under `src/callsight/ui/`) and `stream`
   (zstandard, `src/callsight/serve.py`) — the core must import cleanly
   without them.
@@ -116,5 +127,8 @@ hotspots (cmake_demo must show only `fib` — `mix` is excluded).
 - Docs live in `docs/` (MkDocs Material, `mkdocs.yml`); `docs/status.md`
   includes the root `STATUS.md` — keep the status in STATUS.md, not in the
   docs page. CI deploys the site to GitHub Pages on docs changes.
-- Releases are tag-driven: pushing `v*` runs smoke tests, builds dists,
-  creates a GitHub Release, and publishes to PyPI (trusted publishing).
+- Releases are tag-driven: pushing `v*` builds the static
+  `callsight-ctags-linux-{x86_64,aarch64}` assets (universal-ctags p6.2.1,
+  cross-compiled for aarch64, that leg is continue-on-error), runs smoke
+  tests, builds dists, creates a GitHub Release with dists + ctags assets,
+  and publishes to PyPI (trusted publishing).

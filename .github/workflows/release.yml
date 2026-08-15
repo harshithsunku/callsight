@@ -9,7 +9,96 @@ permissions:
   id-token: write   # PyPI trusted publishing (OIDC)
 
 jobs:
+  # Static universal-ctags binaries for `callsight provision` / the UI's
+  # auto-provisioning. Published as release assets named
+  # callsight-ctags-linux-<arch> (+ .sha256, "<hex>  <name>" format).
+  ctags-assets:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            cross: ""
+            required: true
+          # Cross-compiled; if this leg fails the release goes ahead
+          # without it (aarch64 users get the regex fallback).
+          - arch: aarch64
+            cross: aarch64-linux-gnu
+            required: false
+    continue-on-error: ${{ !matrix.required }}
+    env:
+      ARCH: ${{ matrix.arch }}
+      CROSS: ${{ matrix.cross }}
+      CTAGS_VER: "6.2.1"
+      JANSSON_VER: "2.14"
+    steps:
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config file
+
+      - name: Install aarch64 cross compiler
+        if: matrix.arch == 'aarch64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build jansson (static)
+        run: |
+          set -e
+          curl -fsSL -o jansson.tar.gz \
+            "https://github.com/akheron/jansson/releases/download/v${JANSSON_VER}/jansson-${JANSSON_VER}.tar.gz"
+          tar xzf jansson.tar.gz
+          cd "jansson-${JANSSON_VER}"
+          HOST=""; [ -n "$CROSS" ] && HOST="--host=$CROSS"
+          ./configure --disable-shared --enable-static $HOST \
+            --prefix="$PWD/../jansson-static"
+          make -j"$(nproc)"
+          make install
+
+      - name: Build ctags (static)
+        run: |
+          set -e
+          # Official dist tarball ships a pre-generated ./configure.
+          curl -fsSL -o ctags.tar.gz \
+            "https://github.com/universal-ctags/ctags/releases/download/v${CTAGS_VER}/universal-ctags-${CTAGS_VER}.tar.gz"
+          tar xzf ctags.tar.gz
+          cd "universal-ctags-${CTAGS_VER}"
+          export PKG_CONFIG_PATH="$PWD/../jansson-static/lib/pkgconfig"
+          HOST=""; [ -n "$CROSS" ] && HOST="--host=$CROSS"
+          ./configure $HOST
+          make -j"$(nproc)" LDFLAGS="-static"
+          ${CROSS:+$CROSS-}strip ctags
+
+      - name: Verify the binary
+        run: |
+          cd "universal-ctags-${CTAGS_VER}"
+          file ctags
+          file ctags | grep -q "statically linked"
+          if [ -z "$CROSS" ]; then
+            ./ctags --version | head -1
+            ./ctags --list-features | grep -q json
+          elif command -v qemu-aarch64-static >/dev/null; then
+            qemu-aarch64-static ./ctags --version | head -1
+          fi
+
+      - name: Stage release asset + checksum
+        run: |
+          mkdir -p assets
+          cp "universal-ctags-${CTAGS_VER}/ctags" "assets/callsight-ctags-linux-${ARCH}"
+          cd assets
+          sha256sum "callsight-ctags-linux-${ARCH}" \
+            > "callsight-ctags-linux-${ARCH}.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ctags-${{ matrix.arch }}
+          path: assets/
+          if-no-files-found: error
+
   release:
+    needs: ctags-assets
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,9 +118,17 @@ jobs:
       - name: Build sdist + wheel
         run: uv build
 
+      - name: Download ctags release assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ctags-*
+          path: ctags-assets
+          merge-multiple: true
+
       - name: Create GitHub Release
         run: |
-          gh release create "${{ github.ref_name }}" dist/* \
+          gh release create "${{ github.ref_name }}" \
+            dist/* ctags-assets/callsight-ctags-linux-* \
             --generate-notes --verify-tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
