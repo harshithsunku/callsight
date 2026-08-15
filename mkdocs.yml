@@ -10,20 +10,21 @@ theme:
   palette:
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: deep purple
+      primary: indigo
       accent: cyan
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: deep purple
+      primary: indigo
       accent: cyan
       toggle:
         icon: material/weather-night
         name: Switch to dark mode
   features:
     - navigation.instant
+    - navigation.tabs
     - navigation.sections
     - content.code.copy
     - content.action.view

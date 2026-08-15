@@ -5,60 +5,90 @@ hide:
 ---
 
 <div class="hero" markdown>
+  <p class="hero-eyebrow">Open source · MIT</p>
   <div class="hero-title" markdown># callsight</div>
-  <p class="hero-tag">Compile-time function tracing for C &amp; C++.<br>
-  Zero source edits. One config file. From million-line codebases to embedded devices.</p>
+  <p class="hero-tag">Compile-time function tracing for C &amp; C++ —<br>
+  zero source edits, one <code>trace.config</code>.<br>
+  From million-line codebases to embedded devices.</p>
+  <div class="hero-install" markdown>
+  `uv tool install callsight`
+  </div>
   <div class="hero-actions" markdown>
   [Getting started](getting-started.md){ .md-button .md-button--primary }
   [View on GitHub](https://github.com/harshithsunku/callsight){ .md-button }
   </div>
-  <div class="hero-install" markdown>
-  `uv tool install callsight`
-  </div>
 </div>
+
+<p class="kicker">What it does</p>
+
+## One config file, the whole tracing pipeline.
 
 <div class="feature-grid" markdown>
 
 <div class="feature" markdown>
-### Zero-edit adoption
-`callsight init` drops the runtime into any GCC/Clang project and prints the
-exact Make/CMake wiring. Not one line of your source changes.
+<span class="feature-icon">⚡</span>
+### Compile-time instrumentation
+Entry/exit hooks are injected with `-finstrument-functions` at compile
+time. Not one line of your source changes — and excluded code emits
+**no hook at all**.
 </div>
 
 <div class="feature" markdown>
-### One config file
-`include` / `exclude` / `exclude-func` patterns in `trace.config` become
-compiler-level selection — excluded code emits **no hook at all**.
+<span class="feature-icon">🎯</span>
+### One `trace.config`
+`include` / `exclude` / `exclude-func` patterns in a single file become
+compiler-level selection, recomputed at every build.
 </div>
 
 <div class="feature" markdown>
-### Lean by design
-Per-thread lock-free buffers, ~30–60 ns per event, no malloc and no I/O in
-the hot path. Inert unless `TRACE_ENABLE=1`.
+<span class="feature-icon">📡</span>
+### Remote streaming
+Events flow through a POSIX shared-memory ring to a tiny on-device
+client, then ZSTD-compressed over raw TCP to `callsight serve`. Ring
+full? Events are dropped and counted — the workload **never stalls**.
 </div>
 
 <div class="feature" markdown>
-### Real analysis
-Entry/exit events resolve through `addr2line` into calls, inclusive, self
-and max time per function — `static` functions included.
-</div>
-
-<div class="feature" markdown>
+<span class="feature-icon">💻</span>
 ### Web UI
-`callsight ui`: browse a project, edit its config, build, run, and read a
-sortable hotspot report — no root, one uv command.
+`callsight ui`: a visual config builder with call-subtree selection,
+one-click instrumented builds, traced runs, and a sortable hotspot
+report — no root, one uv command.
 </div>
 
 <div class="feature" markdown>
-### Device → server streaming
-On constrained targets, events flow through a shared-memory ring to a tiny
-on-device client and stream ZSTD-compressed over raw TCP. Nothing
-accumulates on the device.
+<span class="feature-icon">🌲</span>
+### Call-subtree selection
+`include-func handle_request 3` expands through a static call graph —
+trace exactly one feature's subtree instead of the whole binary.
+</div>
+
+<div class="feature" markdown>
+<span class="feature-icon">🛠</span>
+### Make &amp; CMake integrations
+`callsight init` drops in a Makefile fragment or CMake module and prints
+the exact wiring. Normal builds stay untouched; instrumentation is
+opt-in per configure.
 </div>
 
 </div>
 
-## Architecture
+<p class="kicker">How it works</p>
+
+## Compile, run, analyze.
+
+1. **Instrument at compile time** — hooks plus exclude lists are
+   generated from your `trace.config` and source list; the runtime is
+   compiled without the flag so hooks cannot recurse.
+2. **Run** — with `TRACE_ENABLE=1`, per-thread lock-free buffers write
+   events to `trace.*.bin` files, or into a shared-memory ring when
+   `TRACE_SHM` is set.
+3. **Stream (optional)** — the on-device `trace_stream` client drains
+   the ring and ships ZSTD-compressed chunks over TCP to
+   `callsight serve`, which writes standard trace files on the host.
+4. **Analyze** — `callsight analyze` or the web UI resolves events
+   through `addr2line` into calls, inclusive, self and max time per
+   function — `static` functions included.
 
 <div class="arch" markdown>
 
@@ -127,25 +157,45 @@ accumulates on the device.
 
 </div>
 
-## Three commands in
+<p class="kicker">Quick start</p>
 
-```sh
-uv tool install callsight        # 1 · install
-callsight init /your/project     # 2 · adopt (copies runtime, prints wiring)
-# build the instrumented profile, then:
-TRACE_ENABLE=1 ./yourapp && callsight analyze traces/ --top 20
-```
+## Three commands in.
 
-## Built for constrained targets
+=== "Make"
 
-```sh
-# powerful host                        # device
-callsight serve --port 9001            ./trace_stream /tracekit0 10.0.0.5 9001 &
-                                       TRACE_ENABLE=1 TRACE_SHM=/tracekit0 ./app
-```
+    ```sh
+    uv tool install callsight
+    cd /your/project && callsight init .   # prints the Makefile wiring
+    make instrument                        # clean first when switching profiles
+    TRACE_ENABLE=1 ./bin/yourapp.instr     # inert without TRACE_ENABLE=1
+    callsight analyze traces/ --exe bin/yourapp.instr --top 20
+    ```
 
-The traced process never touches disk or the network. If the ring outruns
-the network, events are dropped and counted — the workload never stalls.
+=== "CMake"
+
+    ```sh
+    uv tool install callsight
+    cd /your/project && callsight init .
+    # CMakeLists.txt: include(CallSight) + callsight_instrument(<target>)
+    cmake -DCALLSIGHT_INSTRUMENT=ON -B build-instr
+    cmake --build build-instr
+    TRACE_ENABLE=1 ./build-instr/yourapp
+    callsight analyze traces/ --exe build-instr/yourapp
+    ```
+
+=== "Remote streaming"
+
+    ```sh
+    # analysis host                        # device (after init --stream)
+    uv tool install 'callsight[stream]'    cc -O2 -o callsight/trace_stream \
+    callsight serve --port 9001 \              callsight/trace_stream.c callsight/zstd.c
+        --out traces/                      ./callsight/trace_stream /tracekit0 <host-ip> 9001 &
+                                           TRACE_ENABLE=1 TRACE_SHM=/tracekit0 ./app.instr
+    ```
+
+A clean run reports `unmatched_exits=0`. On constrained targets the
+traced process never touches disk or the network — if the ring outruns
+the network, events are dropped and counted, never stalled.
 
 [Read the streaming guide](streaming.md){ .md-button }
 [Compiler-mechanism survey](instrumentation-options.md){ .md-button }

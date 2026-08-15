@@ -11,6 +11,16 @@ uv tool install 'callsight[stream]'# + streaming server
 Requires [uv](https://docs.astral.sh/uv/). The core is Python stdlib-only;
 the injected runtime is dependency-free C.
 
+## Bundled ctags (optional)
+
+The web UI's config builder enumerates functions with a real `ctags`
+binary when one is available, falling back to a heuristic regex parser
+otherwise. If your system has no ctags, the first UI scan auto-downloads
+a static universal-ctags into `~/.callsight/bin` (override the location
+with `CALLSIGHT_HOME`); when the download isn't possible (offline,
+unsupported architecture) the regex fallback keeps working silently.
+`callsight provision` performs the same download explicitly.
+
 ## Adopt a project
 
 ```sh
