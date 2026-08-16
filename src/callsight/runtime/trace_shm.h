@@ -42,7 +42,18 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
+
+/* Short sleep. nanosleep rather than usleep: usleep was obsoleted and needs
+ * _DEFAULT_SOURCE or _XOPEN_SOURCE, so a strict -std=c11 build of a program
+ * including this header would not see it declared. */
+static inline void trace_shm_nap(long usec) {
+    struct timespec req;
+    req.tv_sec = usec / 1000000L;
+    req.tv_nsec = (usec % 1000000L) * 1000L;
+    nanosleep(&req, NULL);
+}
 
 #define TRACE_SHM_MAGIC      "TKSHM\0\0\0"
 #define TRACE_SHM_VERSION    2u
@@ -153,7 +164,7 @@ static trace_shm_header_t *trace_shm_attach(const char *name,
     if (fstat(fd, &st) != 0 || st.st_size == 0) {
         /* Lost a creation race: someone else is mid-ftruncate. Retry once. */
         close(fd);
-        usleep(1000);
+        trace_shm_nap(1000);
         fd = shm_open(name, O_RDWR, 0600);
         if (fd < 0 || fstat(fd, &st) != 0 || st.st_size == 0) {
             if (fd >= 0) close(fd);

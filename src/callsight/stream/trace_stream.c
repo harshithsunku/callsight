@@ -20,6 +20,14 @@
  * tracer ever attaches, it waits — Ctrl-C to stop.
  */
 
+/* Ask for the POSIX declarations (getaddrinfo, ftruncate, shm_open) before
+ * any header: a toolchain defaulting to a strict -std=c11 would otherwise
+ * hide them, and this file is meant to build with a bare `cc` line on
+ * whatever compiler the device has. */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <stdint.h>
@@ -112,7 +120,7 @@ int main(int argc, char **argv) {
      * looks fine and is wrong by the width of the clock ratio.
      */
     while (h->writers == 0 && h->head == h->tail)
-        usleep(1000);
+        trace_shm_nap(1000);
     __sync_synchronize();  /* pair with the tracer's writers increment */
 
     /* Handshake: identify the stream and forward how the tracer's
@@ -183,7 +191,7 @@ int main(int argc, char **argv) {
             break;  /* tracer exited, ring drained */
 
         if (avail == 0)
-            usleep(1000);  /* idle poll: 1ms keeps latency and CPU low */
+            trace_shm_nap(1000);  /* idle poll: 1ms keeps latency and CPU low */
     }
 
     close(fd);
