@@ -8,7 +8,7 @@
   <a href="https://github.com/harshithsunku/callsight/actions/workflows/ci.yml"><img alt="ci" src="https://github.com/harshithsunku/callsight/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://harshithsunku.github.io/callsight/"><img alt="docs" src="https://github.com/harshithsunku/callsight/actions/workflows/pages.yml/badge.svg"></a>
   <a href="https://pypi.org/project/callsight/"><img alt="PyPI" src="https://img.shields.io/pypi/v/callsight.svg?color=22d3ee"></a>
-  <a href="https://pypi.org/project/callsight/"><img alt="Python" src="https://img.shields.io/pypi/pyversions/callsight.svg?color=818cf8"></a>
+  <a href="https://pypi.org/project/callsight/"><img alt="Python 3.9+" src="https://img.shields.io/badge/python-3.9%2B-818cf8"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
 </p>
 
