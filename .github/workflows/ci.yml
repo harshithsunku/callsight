@@ -63,16 +63,38 @@ jobs:
           gcc -O2 -I src/callsight/runtime -o /tmp/trace_stream \
             src/callsight/stream/trace_stream.c src/callsight/stream/zstd.c
           rm -f /dev/shm/tk_ci && mkdir -p /tmp/stream_traces
-          uv run --extra stream callsight serve --port 9001 \
-            --out /tmp/stream_traces &
-          sleep 3
+
+          # Resolve the stream extra BEFORE backgrounding the server: doing
+          # that work inside the background job raced the fixed sleep the
+          # client used to rely on, and the client then hit a closed port.
+          uv sync --extra stream
+
+          # PYTHONUNBUFFERED so the readiness line reaches the log promptly.
+          PYTHONUNBUFFERED=1 uv run --extra stream callsight serve \
+            --port 9001 --out /tmp/stream_traces >/tmp/serve.log 2>&1 &
+
+          # Wait for the listener rather than guessing how long it takes.
+          for _ in $(seq 1 60); do
+            grep -q listening /tmp/serve.log && break
+            sleep 1
+          done
+          grep -q listening /tmp/serve.log \
+            || { echo "server never started:"; cat /tmp/serve.log; exit 1; }
+
           /tmp/trace_stream /tk_ci 127.0.0.1 9001 &
-          sleep 1
+          client=$!
           cd tests/matrixlab
           make clean && make instrument
           TRACE_ENABLE=1 TRACE_SHM=/tk_ci TRACE_MAX=500000 \
             timeout 5 ./bin/matrixlab.instr || true
-          sleep 3
+
+          # The client exits once the tracer detaches and the ring drains.
+          for _ in $(seq 1 30); do
+            kill -0 "$client" 2>/dev/null || break
+            sleep 1
+          done
+          cat /tmp/serve.log
+
           uv run callsight analyze /tmp/stream_traces \
             --exe bin/matrixlab.instr | tee analyze.out
           grep -q "unmatched_exits=0" analyze.out

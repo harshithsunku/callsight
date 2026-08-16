@@ -89,7 +89,12 @@ TRACE_ENABLE=1 TRACE_MAX=200000 ./build-instr/demo
 uv run callsight analyze traces/ --exe build-instr/demo
 
 # end-to-end smoke test (remote streaming):
-uv run --extra stream callsight serve --port 9001 --out /tmp/stream_traces &
+# Sync the extra FIRST — resolving it inside the backgrounded server races
+# the client, which then connects to a closed port (CI hit exactly this).
+uv sync --extra stream
+PYTHONUNBUFFERED=1 uv run --extra stream callsight serve --port 9001 \
+    --out /tmp/stream_traces >/tmp/serve.log 2>&1 &
+until grep -q listening /tmp/serve.log; do sleep 1; done
 gcc -O2 -I src/callsight/runtime -o /tmp/trace_stream \
     src/callsight/stream/trace_stream.c src/callsight/stream/zstd.c
 /tmp/trace_stream /tk_smoke 127.0.0.1 9001 &
