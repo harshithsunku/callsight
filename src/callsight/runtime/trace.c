@@ -9,7 +9,7 @@
  * Design notes:
  *  - All state is per-thread (TLS); there are no locks in the hot path.
  *  - Events are raw addresses + timestamps; symbol resolution happens
- *    offline (trace_analyze.py + addr2line), keeping hook cost minimal.
+ *    offline (`callsight analyze` + addr2line), keeping hook cost minimal.
  *  - Hooks stay inert (one predictable branch) unless TRACE_ENABLE=1.
  *  - No project dependencies: this file is meant to be dropped into any
  *    C/C++ codebase as-is.

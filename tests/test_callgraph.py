@@ -89,6 +89,34 @@ class TestExpand(CallgraphFixture):
         self.assertEqual(callgraph.expand(self.graph, ["helper"]),
                          {"helper"})
 
+    def test_depth_uses_the_shortest_path_to_a_node(self):
+        """A node reachable by both a short and a long path must be expanded
+        as if only the short one existed. Walking depth-first instead lets
+        the long path claim it at a depth past the limit and silently drop
+        its subtree."""
+        graph = {
+            "seed": {"files": ["s.c"], "callees": ["a", "z"]},
+            "z": {"files": ["s.c"], "callees": ["a"]},   # a again, deeper
+            "a": {"files": ["s.c"], "callees": ["a_child"]},
+            "a_child": {"files": ["s.c"], "callees": []},
+        }
+        # a is a direct callee of the seed, so a_child sits at depth 2.
+        self.assertEqual(callgraph.expand(graph, ["seed"], 2),
+                         {"seed", "a", "z", "a_child"})
+        self.assertEqual(callgraph.expand(graph, ["seed"], 1),
+                         {"seed", "a", "z"})
+
+    def test_depth_limit_independent_of_callee_order(self):
+        """Same graph, callees listed the other way round: same answer."""
+        graph = {
+            "seed": {"files": ["s.c"], "callees": ["z", "a"]},
+            "z": {"files": ["s.c"], "callees": ["a"]},
+            "a": {"files": ["s.c"], "callees": ["a_child"]},
+            "a_child": {"files": ["s.c"], "callees": []},
+        }
+        self.assertEqual(callgraph.expand(graph, ["seed"], 2),
+                         {"seed", "a", "z", "a_child"})
+
 
 class TestFunctionSelection(CallgraphFixture):
     def test_subtree_files_selected(self):

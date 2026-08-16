@@ -28,7 +28,24 @@ CALLSIGHT         ?= callsight
 
 # CFLAGS_INSTRUMENT = your CFLAGS_SYMBOLS + -finstrument-functions + the
 # exclude lists derived from CALLSIGHT_CONFIG and SRCS.
-$(eval $(shell $(CALLSIGHT) flags --config $(CALLSIGHT_CONFIG) -- $(SRCS) 2>/dev/null))
+#
+# --compiler-cmd lets callsight check the toolchain: the exclude lists are
+# GCC-only, so a selective config built with clang is reported here instead
+# of failing with an opaque driver error on every file. Diagnostics go to
+# stderr and are left visible on purpose.
+$(eval $(shell $(CALLSIGHT) flags --config $(CALLSIGHT_CONFIG) \
+	--compiler-cmd '$(CC)' -- $(SRCS)))
+
+# Stop only when an instrumented build was actually requested: a project
+# that includes this fragment unconditionally must still build normally on a
+# machine without callsight installed.
+ifneq ($(filter instrument,$(MAKECMDGOALS)),)
+ifeq ($(CFLAGS_INSTRUMENT),)
+$(error callsight: no instrumentation flags generated — see the message \
+above; re-run '$(CALLSIGHT) flags --config $(CALLSIGHT_CONFIG) -- $$(SRCS)' \
+for the full diagnostic)
+endif
+endif
 
 TRACE_OBJ = $(BUILDDIR)/callsight_runtime/trace.o
 

@@ -11,6 +11,7 @@ contribute their files and their callees are unioned.
 """
 
 import re
+from collections import deque
 
 # Calls we never follow: C keywords with parens and common pseudo-calls.
 C_KEYWORDS = frozenset("""
@@ -132,11 +133,17 @@ def build_graph(sources):
 
 def expand(graph, seeds, depth=None):
     """Breadth-first reachable set from seeds. depth=None means the full
-    subtree; depth=0 is just the seeds, depth=1 adds direct callees, ..."""
+    subtree; depth=0 is just the seeds, depth=1 adds direct callees, ...
+
+    The walk must be FIFO: a node is expanded only the first time it is
+    seen, so it has to be reached at its minimum depth first. Popping
+    depth-first instead lets a long path claim a node at depth >= the limit
+    and stop there, silently dropping the subtree a shorter path would have
+    expanded."""
     seen = set()
-    frontier = [(s, 0) for s in seeds]
+    frontier = deque((s, 0) for s in seeds)
     while frontier:
-        name, d = frontier.pop()
+        name, d = frontier.popleft()
         if name in seen or name not in graph:
             continue
         seen.add(name)

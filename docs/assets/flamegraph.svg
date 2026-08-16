@@ -1,0 +1,164 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1208 364" role="img" aria-label="Flame graph rendered from callsight folded output" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">
+<title>callsight flame graph</title>
+<g><title>all — 925.403 ms self</title><rect x="14.0" y="329" width="1179.0" height="20" rx="2" fill="#e4b356" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="18.0" y="343" font-size="11" fill="#1a1205">all</text></g>
+<g><title>thread_main — 923.207 ms self</title><rect x="14.0" y="308" width="1176.2" height="20" rx="2" fill="#e99c43" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="18.0" y="322" font-size="11" fill="#1a1205">thread_main</text></g>
+<g><title>workload_matrix — 165.438 ms self</title><rect x="14.0" y="287" width="210.0" height="20" rx="2" fill="#e8b22e" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="18.0" y="301" font-size="11" fill="#1a1205">workload_matrix</text></g>
+<g><title>workload_sleep — 93.400 ms self</title><rect x="14.0" y="266" width="118.1" height="20" rx="2" fill="#d0994f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="18.0" y="280" font-size="11" fill="#1a1205">workload_sleep</text></g>
+<g><title>timer_adaptive_sleep — 93.386 ms self</title><rect x="14.0" y="245" width="118.1" height="20" rx="2" fill="#d9963f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="18.0" y="259" font-size="11" fill="#1a1205">timer_adaptive_…</text></g>
+<g><title>timer_sleep_us — 93.372 ms self</title><rect x="14.0" y="224" width="118.1" height="20" rx="2" fill="#cc7328" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="18.0" y="238" font-size="11" fill="#1a1205">timer_sleep_us</text></g>
+<g><title>matrix_destroy — 17.007 ms self</title><rect x="133.1" y="266" width="20.7" height="20" rx="2" fill="#c7784b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>matrix_multiply_blocked — 16.322 ms self</title><rect x="154.8" y="266" width="19.8" height="20" rx="2" fill="#c7a04b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>matrix_multiply_naive — 10.449 ms self</title><rect x="175.6" y="266" width="12.3" height="20" rx="2" fill="#d3a150" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>matrix_create — 9.513 ms self</title><rect x="188.9" y="266" width="11.1" height="20" rx="2" fill="#e29256" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>matrix_multiply_auto — 6.047 ms self</title><rect x="201.0" y="266" width="6.7" height="20" rx="2" fill="#d47250" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>matrix_multiply_blocked — 6.043 ms self</title><rect x="201.0" y="245" width="6.7" height="20" rx="2" fill="#c79a39" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>matrix_frobenius_norm — 5.507 ms self</title><rect x="208.8" y="266" width="6.0" height="20" rx="2" fill="#d89a52" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>matrix_fill_random — 3.245 ms self</title><rect x="215.8" y="266" width="3.1" height="20" rx="2" fill="#d9a252" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>matrix_inverse — 2.806 ms self</title><rect x="219.9" y="266" width="2.6" height="20" rx="2" fill="#e38856" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>matrix_lu_solve — 1.355 ms self</title><rect x="219.9" y="245" width="0.7" height="20" rx="2" fill="#e7a843" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>matrix_clone — 0.957 ms self</title><rect x="221.6" y="245" width="0.6" height="20" rx="2" fill="#d1913c" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>matrix_create — 0.864 ms self</title><rect x="221.6" y="224" width="0.6" height="20" rx="2" fill="#e27a2d" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>matrix_generate_positive_definite — 0.889 ms self</title><rect x="223.5" y="266" width="0.6" height="20" rx="2" fill="#c8774c" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>matrix_multiply_naive — 0.741 ms self</title><rect x="223.5" y="245" width="0.6" height="20" rx="2" fill="#d39a3d" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>workload_signal — 131.964 ms self</title><rect x="225.0" y="287" width="167.3" height="20" rx="2" fill="#cb5728" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="229.0" y="301" font-size="11" fill="#1a1205">workload_signal</text></g>
+<g><title>workload_sleep — 91.972 ms self</title><rect x="225.0" y="266" width="116.3" height="20" rx="2" fill="#d0994f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="229.0" y="280" font-size="11" fill="#1a1205">workload_sleep</text></g>
+<g><title>timer_adaptive_sleep — 91.958 ms self</title><rect x="225.0" y="245" width="116.3" height="20" rx="2" fill="#d9963f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="229.0" y="259" font-size="11" fill="#1a1205">timer_adaptive_…</text></g>
+<g><title>timer_sleep_us — 91.944 ms self</title><rect x="225.0" y="224" width="116.2" height="20" rx="2" fill="#cc7328" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="229.0" y="238" font-size="11" fill="#1a1205">timer_sleep_us</text></g>
+<g><title>fft_recursive — 35.370 ms self</title><rect x="342.2" y="266" width="44.1" height="20" rx="2" fill="#d0774f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="346.2" y="280" font-size="11" fill="#1a1205">fft_…</text></g>
+<g><title>fft_recursive — 35.320 ms self</title><rect x="342.2" y="245" width="44.0" height="20" rx="2" fill="#d06a3c" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="346.2" y="259" font-size="11" fill="#1a1205">fft_…</text></g>
+<g><title>fft_recursive — 35.262 ms self</title><rect x="342.2" y="224" width="44.0" height="20" rx="2" fill="#d05d29" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="346.2" y="238" font-size="11" fill="#1a1205">fft_…</text></g>
+<g><title>fft_recursive — 35.201 ms self</title><rect x="342.2" y="203" width="43.9" height="20" rx="2" fill="#d0774f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="346.2" y="217" font-size="11" fill="#1a1205">fft_…</text></g>
+<g><title>fft_recursive — 35.120 ms self</title><rect x="342.2" y="182" width="43.8" height="20" rx="2" fill="#d06a3c" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="346.2" y="196" font-size="11" fill="#1a1205">fft_…</text></g>
+<g><title>fft_recursive — 35.009 ms self</title><rect x="342.2" y="161" width="43.6" height="20" rx="2" fill="#d05d29" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="346.2" y="175" font-size="11" fill="#1a1205">fft_…</text></g>
+<g><title>fft_recursive — 34.818 ms self</title><rect x="342.2" y="140" width="43.4" height="20" rx="2" fill="#d0774f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="346.2" y="154" font-size="11" fill="#1a1205">fft_…</text></g>
+<g><title>fft_recursive — 34.462 ms self</title><rect x="342.2" y="119" width="42.9" height="20" rx="2" fill="#d06a3c" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="346.2" y="133" font-size="11" fill="#1a1205">fft_…</text></g>
+<g><title>fft_recursive — 32.101 ms self</title><rect x="342.2" y="98" width="39.9" height="20" rx="2" fill="#d05d29" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="346.2" y="112" font-size="11" fill="#1a1205">fft…</text></g>
+<g><title>fft_recursive — 28.389 ms self</title><rect x="342.2" y="77" width="35.2" height="20" rx="2" fill="#d0774f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="346.2" y="91" font-size="11" fill="#1a1205">fft…</text></g>
+<g><title>fft_recursive — 23.046 ms self</title><rect x="342.2" y="56" width="28.4" height="20" rx="2" fill="#d06a3c" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>fft_recursive — 8.495 ms self</title><rect x="342.2" y="35" width="9.8" height="20" rx="2" fill="#d05d29" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>fft_generate_signal — 2.353 ms self</title><rect x="387.3" y="266" width="2.0" height="20" rx="2" fill="#e58f57" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>conv_2d — 0.617 ms self</title><rect x="390.3" y="266" width="0.6" height="20" rx="2" fill="#cc804d" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>fft_transform — 0.565 ms self</title><rect x="391.1" y="266" width="0.6" height="20" rx="2" fill="#cda64e" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>filter_fir — 0.506 ms self</title><rect x="391.8" y="266" width="0.6" height="20" rx="2" fill="#e2a456" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>workload_stats — 116.776 ms self</title><rect x="393.2" y="287" width="147.9" height="20" rx="2" fill="#d4992a" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="397.2" y="301" font-size="11" fill="#1a1205">workload_stats</text></g>
+<g><title>workload_sleep — 52.380 ms self</title><rect x="393.2" y="266" width="65.8" height="20" rx="2" fill="#d0994f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="397.2" y="280" font-size="11" fill="#1a1205">workloa…</text></g>
+<g><title>timer_adaptive_sleep — 52.376 ms self</title><rect x="393.2" y="245" width="65.8" height="20" rx="2" fill="#d9963f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="397.2" y="259" font-size="11" fill="#1a1205">timer_a…</text></g>
+<g><title>timer_sleep_us — 52.372 ms self</title><rect x="393.2" y="224" width="65.8" height="20" rx="2" fill="#cc7328" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="397.2" y="238" font-size="11" fill="#1a1205">timer_s…</text></g>
+<g><title>stats_running_push — 33.523 ms self</title><rect x="460.0" y="266" width="41.7" height="20" rx="2" fill="#e29a56" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="464.0" y="280" font-size="11" fill="#1a1205">stat…</text></g>
+<g><title>monte_carlo_option_price — 2.088 ms self</title><rect x="502.8" y="266" width="1.7" height="20" rx="2" fill="#e48856" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>workload_crypto — 108.996 ms self</title><rect x="542.1" y="287" width="138.0" height="20" rx="2" fill="#d27a2a" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="546.1" y="301" font-size="11" fill="#1a1205">workload_crypto</text></g>
+<g><title>workload_sleep — 80.440 ms self</title><rect x="542.1" y="266" width="101.6" height="20" rx="2" fill="#d0994f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="546.1" y="280" font-size="11" fill="#1a1205">workload_sleep</text></g>
+<g><title>timer_adaptive_sleep — 80.430 ms self</title><rect x="542.1" y="245" width="101.6" height="20" rx="2" fill="#d9963f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="546.1" y="259" font-size="11" fill="#1a1205">timer_adaptiv…</text></g>
+<g><title>timer_sleep_us — 80.420 ms self</title><rect x="542.1" y="224" width="101.5" height="20" rx="2" fill="#cc7328" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="546.1" y="238" font-size="11" fill="#1a1205">timer_sleep_us</text></g>
+<g><title>md5_stress — 15.881 ms self</title><rect x="644.7" y="266" width="19.3" height="20" rx="2" fill="#ce6e4e" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>md5_hash — 15.803 ms self</title><rect x="644.7" y="245" width="19.2" height="20" rx="2" fill="#cc9a3b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>md5_final — 15.097 ms self</title><rect x="644.7" y="224" width="18.3" height="20" rx="2" fill="#de7b2c" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>md5_update — 6.903 ms self</title><rect x="644.7" y="203" width="7.8" height="20" rx="2" fill="#e96a58" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>crc32_stress — 6.821 ms self</title><rect x="664.9" y="266" width="7.7" height="20" rx="2" fill="#d16b4f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>sha256_stress — 2.614 ms self</title><rect x="673.6" y="266" width="2.3" height="20" rx="2" fill="#ce934e" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>sha256_hash — 2.515 ms self</title><rect x="673.6" y="245" width="2.2" height="20" rx="2" fill="#de7a40" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>sha256_final — 1.632 ms self</title><rect x="673.6" y="224" width="1.1" height="20" rx="2" fill="#dd552c" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>sha256_update — 1.312 ms self</title><rect x="673.6" y="203" width="0.7" height="20" rx="2" fill="#c9824c" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>hmac_stress — 2.437 ms self</title><rect x="677.0" y="266" width="2.1" height="20" rx="2" fill="#e89858" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>hmac_sha256 — 2.425 ms self</title><rect x="677.0" y="245" width="2.1" height="20" rx="2" fill="#d2993c" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>sha256_update — 2.141 ms self</title><rect x="677.0" y="224" width="1.7" height="20" rx="2" fill="#c96e28" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>sha256_transform — 1.425 ms self</title><rect x="677.0" y="203" width="0.8" height="20" rx="2" fill="#d5a151" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>pbkdf2_sha256 — 0.762 ms self</title><rect x="680.1" y="266" width="0.6" height="20" rx="2" fill="#df6854" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>hmac_sha256 — 0.705 ms self</title><rect x="680.1" y="245" width="0.6" height="20" rx="2" fill="#d2993c" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>workload_sort — 84.430 ms self</title><rect x="681.1" y="287" width="106.7" height="20" rx="2" fill="#ce9f29" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="685.1" y="301" font-size="11" fill="#1a1205">workload_sort</text></g>
+<g><title>quicksort — 84.430 ms self</title><rect x="681.1" y="266" width="106.7" height="20" rx="2" fill="#d28d50" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="685.1" y="280" font-size="11" fill="#1a1205">quicksort</text></g>
+<g><title>qs_recursive — 84.430 ms self</title><rect x="681.1" y="245" width="106.7" height="20" rx="2" fill="#da9f3f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="685.1" y="259" font-size="11" fill="#1a1205">qs_recursive</text></g>
+<g><title>qs_partition — 43.320 ms self</title><rect x="681.1" y="224" width="54.2" height="20" rx="2" fill="#da732b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="685.1" y="238" font-size="11" fill="#1a1205">qs_par…</text></g>
+<g><title>qs_swap — 33.801 ms self</title><rect x="681.1" y="203" width="42.1" height="20" rx="2" fill="#d96252" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="685.1" y="217" font-size="11" fill="#1a1205">qs_s…</text></g>
+<g><title>qs_recursive — 41.109 ms self</title><rect x="736.3" y="224" width="51.4" height="20" rx="2" fill="#da972b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="740.3" y="238" font-size="11" fill="#1a1205">qs_re…</text></g>
+<g><title>qs_recursive — 32.226 ms self</title><rect x="736.3" y="203" width="40.1" height="20" rx="2" fill="#daa753" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="740.3" y="217" font-size="11" fill="#1a1205">qs_r…</text></g>
+<g><title>qs_recursive — 20.213 ms self</title><rect x="736.3" y="182" width="24.8" height="20" rx="2" fill="#da9f3f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>qs_recursive — 16.020 ms self</title><rect x="736.3" y="161" width="19.4" height="20" rx="2" fill="#da972b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>qs_recursive — 10.321 ms self</title><rect x="736.3" y="140" width="12.2" height="20" rx="2" fill="#daa753" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>qs_partition — 6.556 ms self</title><rect x="736.3" y="119" width="7.4" height="20" rx="2" fill="#da7e3f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>qs_swap — 0.778 ms self</title><rect x="736.3" y="98" width="0.6" height="20" rx="2" fill="#d9402b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>qs_recursive — 3.188 ms self</title><rect x="744.7" y="119" width="3.1" height="20" rx="2" fill="#da9f3f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>qs_partition — 1.782 ms self</title><rect x="744.7" y="98" width="1.3" height="20" rx="2" fill="#da732b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>qs_recursive — 1.039 ms self</title><rect x="747.0" y="98" width="0.6" height="20" rx="2" fill="#da972b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>qs_partition — 5.536 ms self</title><rect x="749.5" y="140" width="6.1" height="20" rx="2" fill="#da8a53" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>qs_swap — 2.302 ms self</title><rect x="749.5" y="119" width="1.9" height="20" rx="2" fill="#d9513e" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>qs_partition — 4.149 ms self</title><rect x="756.8" y="161" width="4.3" height="20" rx="2" fill="#da732b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>qs_swap — 2.408 ms self</title><rect x="756.8" y="140" width="2.1" height="20" rx="2" fill="#d96252" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>qs_partition — 12.011 ms self</title><rect x="762.1" y="182" width="14.3" height="20" rx="2" fill="#da7e3f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>qs_swap — 6.226 ms self</title><rect x="762.1" y="161" width="6.9" height="20" rx="2" fill="#d9402b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>qs_partition — 8.883 ms self</title><rect x="777.4" y="203" width="10.3" height="20" rx="2" fill="#da8a53" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>qs_swap — 6.312 ms self</title><rect x="777.4" y="182" width="7.0" height="20" rx="2" fill="#d9513e" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>workload_memory — 83.802 ms self</title><rect x="788.8" y="287" width="105.9" height="20" rx="2" fill="#d94b2b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="792.8" y="301" font-size="11" fill="#1a1205">workload_memo…</text></g>
+<g><title>workload_sleep — 53.097 ms self</title><rect x="788.8" y="266" width="66.7" height="20" rx="2" fill="#d0994f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="792.8" y="280" font-size="11" fill="#1a1205">workload…</text></g>
+<g><title>timer_adaptive_sleep — 53.092 ms self</title><rect x="788.8" y="245" width="66.7" height="20" rx="2" fill="#d9963f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="792.8" y="259" font-size="11" fill="#1a1205">timer_ad…</text></g>
+<g><title>timer_sleep_us — 53.087 ms self</title><rect x="788.8" y="224" width="66.7" height="20" rx="2" fill="#cc7328" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="792.8" y="238" font-size="11" fill="#1a1205">timer_sl…</text></g>
+<g><title>arena_stress_varied — 22.321 ms self</title><rect x="856.5" y="266" width="27.5" height="20" rx="2" fill="#d48c50" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>arena_alloc — 21.611 ms self</title><rect x="856.5" y="245" width="26.6" height="20" rx="2" fill="#d39e3d" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>arena_alloc_aligned — 20.192 ms self</title><rect x="856.5" y="224" width="24.7" height="20" rx="2" fill="#e0752c" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>arena_chunk_new — 6.636 ms self</title><rect x="856.5" y="203" width="7.5" height="20" rx="2" fill="#e8ae58" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>arena_align_up — 0.776 ms self</title><rect x="864.9" y="203" width="0.6" height="20" rx="2" fill="#e3a056" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>mempool_create — 6.907 ms self</title><rect x="884.9" y="266" width="7.8" height="20" rx="2" fill="#d8a052" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>mempool_stress_test — 0.926 ms self</title><rect x="893.7" y="266" width="0.6" height="20" rx="2" fill="#d0714f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>mempool_alloc — 0.494 ms self</title><rect x="893.7" y="245" width="0.6" height="20" rx="2" fill="#d0703c" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>workload_contention — 71.817 ms self</title><rect x="895.6" y="287" width="90.6" height="20" rx="2" fill="#db412b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="899.6" y="301" font-size="11" fill="#1a1205">workload_co…</text></g>
+<g><title>workload_sleep — 71.101 ms self</title><rect x="895.6" y="266" width="89.7" height="20" rx="2" fill="#d0994f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="899.6" y="280" font-size="11" fill="#1a1205">workload_sl…</text></g>
+<g><title>timer_adaptive_sleep — 71.083 ms self</title><rect x="895.6" y="245" width="89.6" height="20" rx="2" fill="#d9963f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="899.6" y="259" font-size="11" fill="#1a1205">timer_adapt…</text></g>
+<g><title>timer_sleep_us — 71.063 ms self</title><rect x="895.6" y="224" width="89.6" height="20" rx="2" fill="#cc7328" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="899.6" y="238" font-size="11" fill="#1a1205">timer_sleep…</text></g>
+<g><title>workload_graph — 69.273 ms self</title><rect x="987.2" y="287" width="87.3" height="20" rx="2" fill="#d8402b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="991.2" y="301" font-size="11" fill="#1a1205">workload_gr…</text></g>
+<g><title>workload_sleep — 49.237 ms self</title><rect x="987.2" y="266" width="61.8" height="20" rx="2" fill="#d0994f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="991.2" y="280" font-size="11" fill="#1a1205">workloa…</text></g>
+<g><title>timer_adaptive_sleep — 49.230 ms self</title><rect x="987.2" y="245" width="61.8" height="20" rx="2" fill="#d9963f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="991.2" y="259" font-size="11" fill="#1a1205">timer_a…</text></g>
+<g><title>timer_sleep_us — 49.223 ms self</title><rect x="987.2" y="224" width="61.8" height="20" rx="2" fill="#cc7328" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="991.2" y="238" font-size="11" fill="#1a1205">timer_s…</text></g>
+<g><title>graph_generate_random — 14.744 ms self</title><rect x="1050.0" y="266" width="17.8" height="20" rx="2" fill="#d37a50" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>graph_add_edge — 3.506 ms self</title><rect x="1050.0" y="245" width="3.5" height="20" rx="2" fill="#dd5e40" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>dijkstra_shortest_path — 4.607 ms self</title><rect x="1068.8" y="266" width="4.9" height="20" rx="2" fill="#d86752" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>heap_pop — 2.319 ms self</title><rect x="1068.8" y="245" width="2.0" height="20" rx="2" fill="#d0883c" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>he_swap — 0.982 ms self</title><rect x="1068.8" y="224" width="0.6" height="20" rx="2" fill="#df952c" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>heap_push — 1.826 ms self</title><rect x="1071.7" y="245" width="1.3" height="20" rx="2" fill="#cc9b3b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>workload_compress — 61.434 ms self</title><rect x="1075.5" y="287" width="77.3" height="20" rx="2" fill="#cd5729" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="1079.5" y="301" font-size="11" fill="#1a1205">workload_…</text></g>
+<g><title>workload_sleep — 33.294 ms self</title><rect x="1075.5" y="266" width="41.5" height="20" rx="2" fill="#d0994f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="1079.5" y="280" font-size="11" fill="#1a1205">work…</text></g>
+<g><title>timer_adaptive_sleep — 33.291 ms self</title><rect x="1075.5" y="245" width="41.5" height="20" rx="2" fill="#d9963f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="1079.5" y="259" font-size="11" fill="#1a1205">time…</text></g>
+<g><title>timer_sleep_us — 33.288 ms self</title><rect x="1075.5" y="224" width="41.4" height="20" rx="2" fill="#cc7328" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="1079.5" y="238" font-size="11" fill="#1a1205">time…</text></g>
+<g><title>huffman_stress_test — 27.010 ms self</title><rect x="1118.0" y="266" width="33.4" height="20" rx="2" fill="#d47c50" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="1122.0" y="280" font-size="11" fill="#1a1205">huf…</text></g>
+<g><title>huffman_destroy_tree — 9.436 ms self</title><rect x="1118.0" y="245" width="11.0" height="20" rx="2" fill="#d79a3e" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>huffman_destroy_tree — 9.429 ms self</title><rect x="1118.0" y="224" width="11.0" height="20" rx="2" fill="#d7922b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>huffman_destroy_tree — 9.417 ms self</title><rect x="1118.0" y="203" width="11.0" height="20" rx="2" fill="#d7a251" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>huffman_destroy_tree — 9.395 ms self</title><rect x="1118.0" y="182" width="11.0" height="20" rx="2" fill="#d79a3e" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>huffman_destroy_tree — 9.359 ms self</title><rect x="1118.0" y="161" width="10.9" height="20" rx="2" fill="#d7922b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>huffman_destroy_tree — 9.321 ms self</title><rect x="1118.0" y="140" width="10.9" height="20" rx="2" fill="#d7a251" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>huffman_destroy_tree — 9.251 ms self</title><rect x="1118.0" y="119" width="10.8" height="20" rx="2" fill="#d79a3e" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>huffman_destroy_tree — 9.112 ms self</title><rect x="1118.0" y="98" width="10.6" height="20" rx="2" fill="#d7922b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>huffman_destroy_tree — 8.825 ms self</title><rect x="1118.0" y="77" width="10.3" height="20" rx="2" fill="#d7a251" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>huffman_destroy_tree — 8.163 ms self</title><rect x="1118.0" y="56" width="9.4" height="20" rx="2" fill="#d79a3e" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>huffman_destroy_tree — 1.765 ms self</title><rect x="1118.0" y="35" width="1.3" height="20" rx="2" fill="#d7922b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>huffman_destroy_tree — 0.533 ms self</title><rect x="1118.0" y="14" width="0.6" height="20" rx="2" fill="#d7a251" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>huffman_build_tree — 5.847 ms self</title><rect x="1130.0" y="245" width="6.5" height="20" rx="2" fill="#d4a93d" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>nh_sift_down — 1.075 ms self</title><rect x="1130.0" y="224" width="0.6" height="20" rx="2" fill="#ea492e" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>huffman_new_node — 0.982 ms self</title><rect x="1131.4" y="224" width="0.6" height="20" rx="2" fill="#d04f29" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>nh_sift_up — 0.969 ms self</title><rect x="1132.6" y="224" width="0.6" height="20" rx="2" fill="#d74b2b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>huffman_encode — 3.453 ms self</title><rect x="1137.5" y="245" width="3.4" height="20" rx="2" fill="#e79443" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>huffman_generate_codes — 1.754 ms self</title><rect x="1141.9" y="245" width="1.2" height="20" rx="2" fill="#d6663e" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>gen_codes_recursive — 1.750 ms self</title><rect x="1141.9" y="224" width="1.2" height="20" rx="2" fill="#da672b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>gen_codes_recursive — 1.745 ms self</title><rect x="1141.9" y="203" width="1.2" height="20" rx="2" fill="#da8153" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>gen_codes_recursive — 1.736 ms self</title><rect x="1141.9" y="182" width="1.2" height="20" rx="2" fill="#da743f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>gen_codes_recursive — 1.724 ms self</title><rect x="1141.9" y="161" width="1.2" height="20" rx="2" fill="#da672b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>gen_codes_recursive — 1.707 ms self</title><rect x="1141.9" y="140" width="1.2" height="20" rx="2" fill="#da8153" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>gen_codes_recursive — 1.677 ms self</title><rect x="1141.9" y="119" width="1.1" height="20" rx="2" fill="#da743f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>gen_codes_recursive — 1.620 ms self</title><rect x="1141.9" y="98" width="1.1" height="20" rx="2" fill="#da672b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>gen_codes_recursive — 1.504 ms self</title><rect x="1141.9" y="77" width="0.9" height="20" rx="2" fill="#da8153" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>gen_codes_recursive — 1.244 ms self</title><rect x="1141.9" y="56" width="0.6" height="20" rx="2" fill="#da743f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>gen_codes_recursive — 0.771 ms self</title><rect x="1141.9" y="35" width="0.6" height="20" rx="2" fill="#da672b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>huffman_decode — 1.078 ms self</title><rect x="1144.1" y="245" width="0.6" height="20" rx="2" fill="#d58d3d" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>rle_stress_test — 0.701 ms self</title><rect x="1152.4" y="266" width="0.6" height="20" rx="2" fill="#d0794f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>workload_mixed — 29.120 ms self</title><rect x="1153.9" y="287" width="36.1" height="20" rx="2" fill="#d87a2b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/><text x="1157.9" y="301" font-size="11" fill="#1a1205">wor…</text></g>
+<g><title>helpers_rotl32 — 8.548 ms self</title><rect x="1153.9" y="266" width="9.9" height="20" rx="2" fill="#cc6c4d" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>helpers_popcount — 8.160 ms self</title><rect x="1164.8" y="266" width="9.4" height="20" rx="2" fill="#d4a350" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>helpers_clz — 6.787 ms self</title><rect x="1175.2" y="266" width="7.7" height="20" rx="2" fill="#cc834d" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>workload_sleep — 4.614 ms self</title><rect x="1183.8" y="266" width="4.9" height="20" rx="2" fill="#d0994f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>timer_adaptive_sleep — 4.613 ms self</title><rect x="1183.8" y="245" width="4.9" height="20" rx="2" fill="#d9963f" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>timer_sleep_us — 4.613 ms self</title><rect x="1183.8" y="224" width="4.9" height="20" rx="2" fill="#cc7328" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>deep_compute_1 — 0.886 ms self</title><rect x="1189.7" y="266" width="0.6" height="20" rx="2" fill="#dcac53" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>deep_compute_2 — 0.726 ms self</title><rect x="1189.7" y="245" width="0.6" height="20" rx="2" fill="#cb9e3b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>deep_compute_3 — 0.541 ms self</title><rect x="1189.7" y="224" width="0.6" height="20" rx="2" fill="#d85c2b" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>main — 2.196 ms self</title><rect x="1191.2" y="308" width="1.8" height="20" rx="2" fill="#e39542" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+<g><title>threadpool_start — 2.188 ms self</title><rect x="1191.2" y="287" width="1.8" height="20" rx="2" fill="#e3802d" stroke="rgba(0,0,0,0.28)" stroke-width="0.5"/></g>
+</svg>

@@ -1,6 +1,6 @@
 [project]
 name = "callsight"
-version = "0.2.2"
+version = "0.3.0"
 description = "Compile-time function tracing for C/C++ projects: selective -finstrument-functions coverage from one config file, zero source edits."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -18,9 +18,6 @@ callsight = "callsight.cli:main"
 Homepage = "https://harshithsunku.github.io/callsight/"
 Repository = "https://github.com/harshithsunku/callsight"
 Issues = "https://github.com/harshithsunku/callsight/issues"
-
-[dependency-groups]
-docs = ["mkdocs-material>=9.5", "pymdown-extensions>=10.7"]
 
 [build-system]
 requires = ["hatchling"]

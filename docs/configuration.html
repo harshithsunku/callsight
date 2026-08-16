@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Configuration — callsight</title>
+<meta name="description" content="The trace.config reference: include, exclude, exclude-func and include-func directives, pattern matching rules, the three selection levels, and how to cut event volume at scale.">
+<meta property="og:title" content="Configuration — callsight">
+<meta property="og:description" content="One file decides what gets instrumented. Directives, pattern rules, call-subtree selection, and the strategy for keeping event volume sane.">
+<meta name="theme-color" content="#0d1016">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav-inner">
+    <a class="brand" href="./">
+      <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="10.5" cy="10.5" r="6.5" stroke="#22d3ee" stroke-width="2"/>
+        <path d="M15.6 15.6 L21 21" stroke="#818cf8" stroke-width="2.4" stroke-linecap="round"/>
+        <path d="M7.5 11.5 l2 2.4 3.5-5.4" stroke="#22d3ee" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg><span>call<span class="a">sight</span></span></a>
+    <div class="topnav-links">
+      <a href="getting-started.html">Getting started</a>
+      <a href="configuration.html" class="active">Configuration</a>
+      <a href="analysis.html">Analysis</a>
+      <a href="web-ui.html">Web UI</a>
+      <a href="streaming.html">Streaming</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="reference.html">Reference</a>
+    </div>
+    <div class="topnav-right">
+      <a class="btn btn-ghost" href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener">GitHub</a>
+      <button class="theme-btn" id="theme-toggle" aria-label="Toggle theme" title="Toggle light/dark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="4"></circle>
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+        </svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<header class="page-head">
+  <div class="container">
+    <span class="eyebrow">Reference</span>
+    <h1>Configuration</h1>
+    <p>One <code>trace.config</code> next to your code decides what gets hooks. It is read
+    at every build, so changing it and rebuilding is the entire workflow.</p>
+  </div>
+</header>
+
+<div class="layout-with-toc">
+<main class="prose">
+
+<h2 id="directives">Directives</h2>
+<p>One directive per line. <code>#</code> starts a comment; blank lines are ignored. With
+no directives at all, <strong>everything</strong> is instrumented.</p>
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th>Directive</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr>
+      <td class="nowrap"><code>include &lt;pattern&gt;</code></td>
+      <td>Only instrument matching sources. With no <code>include</code> line, every source is included.</td>
+    </tr>
+    <tr>
+      <td class="nowrap"><code>exclude &lt;pattern&gt;</code></td>
+      <td>Never instrument matching sources — or <strong>headers</strong>: the compiler matches the file a function is <em>defined</em> in, so a header path silences its inline/static helpers. Exclude always wins over include.</td>
+    </tr>
+    <tr>
+      <td class="nowrap"><code>exclude-func &lt;name&gt;</code></td>
+      <td>Never instrument functions whose (mangled) name <em>contains</em> <code>&lt;name&gt;</code> — the compiler's match is a substring match, so be specific.</td>
+    </tr>
+    <tr>
+      <td class="nowrap"><code>include-func &lt;name&gt; [depth]</code></td>
+      <td>Instrument <code>&lt;name&gt;</code> and its whole call subtree, resolved statically from your sources. Optional depth: <code>0</code> = just that function, <code>1</code> = direct callees, default = the full subtree.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h3 id="patterns">Pattern matching</h3>
+<p>A pattern matches a source path when it matches the full path <em>or any trailing part
+of it</em> — so <code>src/utils/rng.c</code> also matches
+<code>../project/src/utils/rng.c</code>, whatever path your build passes to the
+compiler.</p>
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th>Kind</th><th>Examples</th></tr></thead>
+  <tbody>
+    <tr><td>glob</td><td><code>src/net/**</code> · <code>*test*.c</code> · <code>rng.c</code></td></tr>
+    <tr><td>exact path</td><td><code>src/utils/rng.c</code></td></tr>
+    <tr><td>directory prefix</td><td><code>src/sort</code> · <code>src/sort/</code></td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="levels">Three levels of selection</h2>
+<p>From coarsest to finest. The first two are compile-time and therefore free at runtime;
+the third is a runtime filter that needs no rebuild.</p>
+
+<h3 id="level-file">1 · File and folder</h3>
+<p><code>include</code> / <code>exclude</code> patterns. The bluntest and cheapest
+instrument: whole translation units are compiled with or without hooks.</p>
+<pre><code><span class="k">include</span> src/network/
+<span class="k">exclude</span> src/network/crc.c</code></pre>
+
+<h3 id="level-func">2 · Function and call subtree</h3>
+<p><code>include-func</code> names an entry point — a task, a request handler, a
+workload — and callsight parses your sources, builds a static call graph, and instruments
+exactly the reachable subtree. Everything else defined in those files, including helpers
+defined in headers, is excluded by name at compile time.</p>
+<pre><code><span class="p">$</span> callsight select src/ --function workload_sort
+workload_sort: <span class="n">31</span> functions across 6 files (full depth)
+    heapsort
+    mergesort
+    qs_partition
+    qs_swap
+    …
+
+<span class="c"># add to trace.config:</span>
+include-func workload_sort</code></pre>
+<p>Explore before committing: <code>--depth 1</code> to see just the direct callees,
+<code>--list</code> to dump every function callsight can see.</p>
+<div class="note warn">
+  <strong>Static resolution has limits.</strong> Calls through function pointers,
+  macro-generated calls, and C++ dynamic dispatch are not followed — those callees simply
+  don't get hooks. If a function you expected is missing from the report, that is the
+  first thing to check.
+</div>
+
+<h3 id="level-thread">3 · Thread</h3>
+<p>A runtime filter, matched against the thread name set with
+<code>pthread_setname_np</code>. No rebuild required.</p>
+<pre><code><span class="p">$</span> TRACE_THREADS="sort-*,worker-1" TRACE_ENABLE=1 ./yourapp.instr</code></pre>
+<p>The name is checked at the thread's first hook call and re-checked periodically, since
+threads commonly set their name <em>after</em> starting. Expect a handful of
+<code>unmatched_exits</code> at activation for late-named threads — the events from before
+the thread matched are absent by design.</p>
+
+<h2 id="strategy">Strategy at scale</h2>
+<p>Event volume is the main cost. A call-heavy program easily generates millions of events
+per second, and the analyzer's job gets harder the more noise you feed it. The levers,
+cheapest first:</p>
+<ol>
+  <li><strong>Compile-time excludes.</strong> Run wide once, sort the report by
+    <code>calls</code>, exclude the chatty leaf helpers, rebuild. Typically cuts volume
+    10–100× while keeping the structural picture intact.</li>
+  <li><strong><code>include</code> directives.</strong> Instrument only the subsystem under
+    investigation — <code>include src/network/</code>.</li>
+  <li><strong><code>include-func</code>.</strong> One entry point, its exact call subtree,
+    nothing else.</li>
+  <li><strong>Runtime gating.</strong> <code>TRACE_ENABLE</code> and
+    <code>TRACE_MAX</code> control <em>when</em> and <em>how much</em> you pay;
+    <code>TRACE_THREADS</code> narrows to the threads that matter.</li>
+  <li><strong>Source opt-out</strong> (the only one that touches your code):
+    <code>__attribute__((no_instrument_function))</code> on a single function.</li>
+</ol>
+<p>Preview any config without building:</p>
+<pre><code><span class="p">$</span> callsight scan src/ --config trace.config
+35 sources: 34 instrumented, 1 excluded (config: trace.config)
+  excluded: src/utils/rng.c</code></pre>
+
+<h2 id="runtime">Runtime knobs</h2>
+<p>Environment variables read once, at the first hook call.</p>
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th>Variable</th><th>Default</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td class="nowrap"><code>TRACE_ENABLE</code></td><td>off</td><td><code>1</code> enables collection; hooks are inert otherwise</td></tr>
+    <tr><td class="nowrap"><code>TRACE_DIR</code></td><td><code>./traces</code></td><td>Output directory (file mode)</td></tr>
+    <tr><td class="nowrap"><code>TRACE_MAX</code></td><td><code>0</code> (unlimited)</td><td>Global event cap — always set one for long runs</td></tr>
+    <tr><td class="nowrap"><code>TRACE_THREADS</code></td><td>unset (all)</td><td>Comma-separated globs on thread names, e.g. <code>sort-*</code></td></tr>
+    <tr><td class="nowrap"><code>TRACE_SHM</code></td><td>unset</td><td>Streaming mode: POSIX shm ring name, e.g. <code>/callsight0</code></td></tr>
+    <tr><td class="nowrap"><code>TRACE_SHM_SIZE</code></td><td>16 MiB</td><td>Ring capacity in bytes</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="example">A worked example</h2>
+<p>The selection used by the bundled <code>matrixlab</code> fixture — three lines that cut
+a noisy trace down to a readable one:</p>
+<pre><code><span class="c"># trace.config</span>
+<span class="k">exclude</span> src/utils/rng.c        <span class="c"># RNG helpers dominate call volume: pure noise</span>
+<span class="k">exclude</span> src/signal/fft.h       <span class="c"># header-inline helpers defined in fft.h</span>
+<span class="k">exclude-func</span> crc32_update     <span class="c"># one hot function, by name</span></code></pre>
+<p>Which becomes, at build time:</p>
+<pre><code>-finstrument-functions
+-finstrument-functions-exclude-file-list=src/utils/rng.c,src/signal/fft.h
+-finstrument-functions-exclude-function-list=crc32_update</code></pre>
+
+<div class="note">
+  <strong>Prefer compile-time exclusion to anything else.</strong> An excluded function
+  emits no hook: no call, no flag check, no branch. That is a guarantee no runtime filter
+  can make.
+</div>
+
+<h2 id="generate">Generate it by clicking</h2>
+<p>If you'd rather not write patterns by hand, the web UI's config builder enumerates
+every source file and function in the project and writes the config from your
+checkboxes — see the <a href="web-ui.html#builder">Web UI page</a>.</p>
+
+<div class="next-links">
+  <a class="next-link" href="analysis.html"><strong>Analysis &rarr;</strong><span>Read the report and decide what to exclude next.</span></a>
+  <a class="next-link" href="reference.html"><strong>Reference &rarr;</strong><span>Full CLI, build-integration variables, and file formats.</span></a>
+</div>
+
+</main>
+
+<aside class="toc">
+  <div class="toc-label">On this page</div>
+  <ul>
+    <li><a href="#directives">Directives</a></li>
+    <li class="sub"><a href="#patterns">Pattern matching</a></li>
+    <li><a href="#levels">Three levels of selection</a></li>
+    <li class="sub"><a href="#level-file">File and folder</a></li>
+    <li class="sub"><a href="#level-func">Function and subtree</a></li>
+    <li class="sub"><a href="#level-thread">Thread</a></li>
+    <li><a href="#strategy">Strategy at scale</a></li>
+    <li><a href="#runtime">Runtime knobs</a></li>
+    <li><a href="#example">A worked example</a></li>
+    <li><a href="#generate">Generate it by clicking</a></li>
+  </ul>
+</aside>
+</div>
+
+<footer>
+  <div class="foot-row">
+    <a href="./">Home</a>
+    <a href="getting-started.html">Getting started</a>
+    <a href="analysis.html">Analysis</a>
+    <a href="web-ui.html">Web UI</a>
+    <a href="streaming.html">Streaming</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="reference.html">Reference</a>
+    <a href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener">GitHub</a>
+  </div>
+  <div>MIT licensed · built for people who profile C and C++ on Linux</div>
+</footer>
+
+<script src="assets/docs.js"></script>
+</body>
+</html>

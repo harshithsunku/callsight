@@ -283,6 +283,11 @@ def run(body: RunBody):
 
 @app.get("/api/analyze")
 def analyze_traces(path: str, binary: str, top: int = Query(50, ge=0)):
+    """Hotspot report; rows are the `top` hottest by self time.
+
+    collect() returns rows in completion order, so they must be sorted
+    before truncating — otherwise 'top' would be an arbitrary slice of the
+    functions rather than the hot ones."""
     p = project_path(path)
     binary = (p / binary).resolve()
     if not binary.is_file() or p not in binary.parents:
@@ -291,5 +296,8 @@ def analyze_traces(path: str, binary: str, top: int = Query(50, ge=0)):
         data = analyze.collect(p / "traces", str(binary))
     except RuntimeError as e:
         raise HTTPException(400, str(e))
-    data["rows"] = data["rows"][:top]
+    data["rows"] = sorted(data["rows"], key=lambda r: r["self_ms"],
+                          reverse=True)
+    if top:
+        data["rows"] = data["rows"][:top]
     return data

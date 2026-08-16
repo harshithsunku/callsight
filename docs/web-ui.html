@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Web UI — callsight</title>
+<meta name="description" content="callsight ui: a local web app that browses a project, builds trace.config from checkboxes, compiles the instrumented profile, runs it, and shows the hotspot report.">
+<meta property="og:title" content="Web UI — callsight">
+<meta property="og:description" content="Drive the whole tracing workflow from a browser, and build trace.config by ticking files and functions.">
+<meta property="og:image" content="https://harshithsunku.github.io/callsight/screenshots/01-workflow.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://harshithsunku.github.io/callsight/screenshots/01-workflow.png">
+<meta name="theme-color" content="#0d1016">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav-inner">
+    <a class="brand" href="./">
+      <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="10.5" cy="10.5" r="6.5" stroke="#22d3ee" stroke-width="2"/>
+        <path d="M15.6 15.6 L21 21" stroke="#818cf8" stroke-width="2.4" stroke-linecap="round"/>
+        <path d="M7.5 11.5 l2 2.4 3.5-5.4" stroke="#22d3ee" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg><span>call<span class="a">sight</span></span></a>
+    <div class="topnav-links">
+      <a href="getting-started.html">Getting started</a>
+      <a href="configuration.html">Configuration</a>
+      <a href="analysis.html">Analysis</a>
+      <a href="web-ui.html" class="active">Web UI</a>
+      <a href="streaming.html">Streaming</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="reference.html">Reference</a>
+    </div>
+    <div class="topnav-right">
+      <a class="btn btn-ghost" href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener">GitHub</a>
+      <button class="theme-btn" id="theme-toggle" aria-label="Toggle theme" title="Toggle light/dark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="4"></circle>
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+        </svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<header class="page-head">
+  <div class="container">
+    <span class="eyebrow">Optional extra</span>
+    <h1>Web UI</h1>
+    <p>The whole workflow in a browser — browse a project, write the config by ticking
+    boxes, build, run, and read the report. No root, one command.</p>
+    <pre style="max-width:520px;margin-top:22px"><code><span class="p">$</span> uv tool install 'callsight[ui]'
+<span class="p">$</span> callsight ui                <span class="c"># http://127.0.0.1:8321</span></code></pre>
+  </div>
+</header>
+
+<div class="layout-with-toc">
+<main class="prose">
+
+<h2 id="workflow">Workflow tab</h2>
+<p>The end-to-end pipeline in four numbered steps, driving exactly the same code as the
+CLI.</p>
+
+<div class="shot" style="margin-bottom:26px">
+  <img src="screenshots/01-workflow.png" alt="The callsight Workflow tab: a project path input with the detected build system and source count, the trace.config editor, and the selection preview reporting 34 of 35 sources instrumented" loading="lazy">
+  <div class="shot-caption"><strong>Project and config</strong>Opening a project reports its source count, build system and instrumented binaries; the preview shows what the current config selects.</div>
+</div>
+
+<ol>
+  <li><strong>Project</strong> — browse the filesystem (directories badged
+    <code>make</code>/<code>cmake</code>) and open one. You get the source count, the
+    detected build system, and any instrumented binaries already present.</li>
+  <li><strong>trace.config</strong> — an editor with save, a selection preview
+    (<em>N sources: X instrumented, Y excluded</em>), and a call-subtree helper: type a
+    function name and optional depth to resolve its subtree through the static call graph
+    and append the matching <code>include-func</code> line.</li>
+  <li><strong>Build &amp; run</strong> — one-click instrumented build
+    (<code>make instrument</code> or the CMake flow) with the full log captured, then run
+    the binary with <code>TRACE_ENABLE=1</code>, a <code>TRACE_MAX</code> cap and a
+    timeout.</li>
+  <li><strong>Report</strong> — the analyzer result as a sortable table: calls, inclusive,
+    self and max time, with the summary line turning green on
+    <code>unmatched_exits=0</code>.</li>
+</ol>
+
+<div class="shot">
+  <img src="screenshots/02-report.png" alt="The callsight report table sorted by self time, with resolved function names and source locations" loading="lazy">
+  <div class="shot-caption"><strong>The report</strong>Click any column header to re-sort. Rows arrive ordered by self time, so the hot leaves are on top.</div>
+</div>
+
+<h2 id="builder">Config Builder tab</h2>
+<p>A visual editor for <code>trace.config</code> — no pattern syntax to memorize.</p>
+
+<div class="shot" style="margin-bottom:26px">
+  <img src="screenshots/03-config-builder.png" alt="The config builder: a checkbox pane listing 35 source files with per-file function counts, beside a filtered pane of 315 functions with include-subtree and exclude actions" loading="lazy">
+  <div class="shot-caption"><strong>Files on the left, functions on the right</strong>Both panes filter live; the <code>symbols:</code> badge names the backend that produced the scan.</div>
+</div>
+
+<ol>
+  <li><strong>Pick a folder and scan.</strong> The builder enumerates every source file and
+    the functions defined in them. It uses <code>ctags</code> when available — a
+    <code>symbols:</code> badge next to the Scan button tells you which backend served the
+    scan: system ctags, the bundled static copy (auto-downloaded on first scan), or the
+    built-in regex fallback.</li>
+  <li><strong>Searchable checkbox panes</strong> — one for files, one for functions. Filter
+    either list and tick what you care about.</li>
+  <li><strong>Per-function actions</strong> — for each selected function choose
+    <em>include-subtree</em> (expands through the static call graph, like
+    <code>include-func</code>) or <em>exclude</em>.</li>
+  <li><strong>Preview</strong> — writes the generated config, then dry-runs the selection
+    against it: how many sources would be instrumented versus excluded with your current
+    choices. (The write is required — the dry run reads the saved file.)</li>
+  <li><strong>Apply</strong> — writes <code>trace.config</code> into the project, ready for
+    the next instrumented build.</li>
+</ol>
+<p>Both buttons ask before overwriting an existing config whose content differs.</p>
+
+<h2 id="ctags">Symbol enumeration</h2>
+<p>The builder needs to know what functions a project defines. In order of preference:</p>
+<ul>
+  <li><strong>Universal Ctags on <code>PATH</code></strong> — accurate parsing, with
+    <code>static</code> detection.</li>
+  <li><strong>The bundled static ctags</strong> — downloaded on first scan into
+    <code>~/.callsight/bin</code> and checksum-verified. Run it ahead of time with
+    <code>callsight provision</code>, or inspect what would be used with the same command.</li>
+  <li><strong>The regex fallback</strong> — the same heuristic parser that backs
+    <code>include-func</code>. Always available, no dependency.</li>
+</ul>
+
+<h2 id="notes">Notes</h2>
+<div class="note warn">
+  <strong>It runs builds and binaries on the host.</strong> The UI binds to
+  <code>127.0.0.1</code> by default. <code>--host 0.0.0.0</code> exposes it on the network —
+  only do that on a trusted one.
+</div>
+<ul>
+  <li>Everything the UI does goes through the same functions as the CLI. There are no
+    behavior differences between driving it from the browser and from a shell.</li>
+  <li>CMake is fetched ephemerally through <code>uvx</code> when the host has none, so a
+    CMake project works without installing CMake system-wide.</li>
+  <li>The UI's dependencies (FastAPI, uvicorn) live in the <code>ui</code> extra; the core
+    package stays stdlib-only.</li>
+</ul>
+
+<div class="next-links">
+  <a class="next-link" href="configuration.html"><strong>Configuration &rarr;</strong><span>What the generated config actually means.</span></a>
+  <a class="next-link" href="analysis.html"><strong>Analysis &rarr;</strong><span>Read the same report in the terminal, with flame-graph export.</span></a>
+</div>
+
+</main>
+
+<aside class="toc">
+  <div class="toc-label">On this page</div>
+  <ul>
+    <li><a href="#workflow">Workflow tab</a></li>
+    <li><a href="#builder">Config Builder tab</a></li>
+    <li><a href="#ctags">Symbol enumeration</a></li>
+    <li><a href="#notes">Notes</a></li>
+  </ul>
+</aside>
+</div>
+
+<footer>
+  <div class="foot-row">
+    <a href="./">Home</a>
+    <a href="getting-started.html">Getting started</a>
+    <a href="configuration.html">Configuration</a>
+    <a href="analysis.html">Analysis</a>
+    <a href="streaming.html">Streaming</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="reference.html">Reference</a>
+    <a href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener">GitHub</a>
+  </div>
+  <div>MIT licensed · built for people who profile C and C++ on Linux</div>
+</footer>
+
+<script src="assets/docs.js"></script>
+</body>
+</html>

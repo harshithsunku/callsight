@@ -37,9 +37,17 @@ function(callsight_instrument target)
 
     # Sources as the compiler sees them (relative to the target's source dir).
     get_target_property(_srcs ${target} SOURCES)
+    # --compiler-cmd: the exclude lists are GCC-only, so callsight reports an
+    # unsupported toolchain here instead of letting clang fail per file.
+    # CMAKE_C_COMPILER is empty in a C++-only project, so fall back to CXX.
+    set(_cc "${CMAKE_C_COMPILER}")
+    if(NOT _cc)
+        set(_cc "${CMAKE_CXX_COMPILER}")
+    endif()
     execute_process(
         COMMAND ${CALLSIGHT_COMMAND} flags --format raw
-                --config "${CALLSIGHT_CONFIG}" -- ${_srcs}
+                --config "${CALLSIGHT_CONFIG}"
+                --compiler-cmd "${_cc}" -- ${_srcs}
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
         OUTPUT_VARIABLE _flags
         ERROR_VARIABLE _flags_err
@@ -48,7 +56,8 @@ function(callsight_instrument target)
     if(NOT _flags_rc EQUAL 0)
         message(FATAL_ERROR "callsight: flag generation failed (rc=${_flags_rc})\n"
                 "command: ${CALLSIGHT_COMMAND} flags --format raw "
-                "--config ${CALLSIGHT_CONFIG} -- ${_srcs}\n${_flags_err}")
+                "--config ${CALLSIGHT_CONFIG} --compiler-cmd ${_cc} "
+                "-- ${_srcs}\n${_flags_err}")
     endif()
     separate_arguments(_flags)
     target_compile_options(${target} PRIVATE ${_flags})

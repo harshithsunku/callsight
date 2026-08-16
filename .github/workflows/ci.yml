@@ -8,10 +8,15 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both ends of the range declared in pyproject's requires-python.
+        python-version: ["3.9", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv run python -m unittest discover -s tests
+      - run: uv run --python ${{ matrix.python-version }} python -m unittest discover -s tests
 
   smoke-make:
     runs-on: ubuntu-latest

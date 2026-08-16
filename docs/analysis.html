@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Analysis — callsight</title>
+<meta name="description" content="Read the callsight hotspot report: self vs inclusive time, unmatched exits, per-thread summary. Export folded stacks for flame graphs and JSON for your own tooling.">
+<meta property="og:title" content="Analysis — callsight">
+<meta property="og:description" content="What every column means, how to export flame graphs and JSON, and what to do when a trace looks wrong.">
+<meta name="theme-color" content="#0d1016">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav-inner">
+    <a class="brand" href="./">
+      <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="10.5" cy="10.5" r="6.5" stroke="#22d3ee" stroke-width="2"/>
+        <path d="M15.6 15.6 L21 21" stroke="#818cf8" stroke-width="2.4" stroke-linecap="round"/>
+        <path d="M7.5 11.5 l2 2.4 3.5-5.4" stroke="#22d3ee" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg><span>call<span class="a">sight</span></span></a>
+    <div class="topnav-links">
+      <a href="getting-started.html">Getting started</a>
+      <a href="configuration.html">Configuration</a>
+      <a href="analysis.html" class="active">Analysis</a>
+      <a href="web-ui.html">Web UI</a>
+      <a href="streaming.html">Streaming</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="reference.html">Reference</a>
+    </div>
+    <div class="topnav-right">
+      <a class="btn btn-ghost" href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener">GitHub</a>
+      <button class="theme-btn" id="theme-toggle" aria-label="Toggle theme" title="Toggle light/dark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="4"></circle>
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+        </svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<header class="page-head">
+  <div class="container">
+    <span class="eyebrow">Guide</span>
+    <h1>Analysis</h1>
+    <p>What the report says, how to turn it into a flame graph, and how to tell a clean
+    trace from a broken one.</p>
+  </div>
+</header>
+
+<div class="layout-with-toc">
+<main class="prose">
+
+<h2 id="report">The report</h2>
+<pre><code><span class="p">$</span> callsight analyze traces/ --exe bin/matrixlab.instr --top 5
+events=<span class="n">1000000</span> threads=<span class="n">26</span> functions=<span class="n">139</span> span=48.7ms <span class="s">unmatched_exits=0</span> unclosed_enters=136
+
+== TOP BY SELF TIME ==
+     calls      incl_ms      self_ms       max_ms  function (first location)
+       272      529.382      529.382        9.983  timer_sleep_us (src/utils/timer.c:38)
+    127048       52.470       52.470        6.643  qs_swap (src/sort/quicksort.c:5)
+     57284      366.418       35.370        5.738  fft_recursive (src/signal/fft.c:63)
+    104870       33.523       33.523       10.017  stats_running_push (src/stats/statistics.c:84)
+      3195       60.699       30.238       18.485  qs_partition (src/sort/quicksort.c:23)
+
+== TOP BY INCLUSIVE TIME ==
+…
+
+== PER-THREAD SUMMARY ==
+     tid     events      span_ms</code></pre>
+<p>Trace files are streamed rather than loaded, so a multi-million-event run costs a few
+MB of analyzer memory instead of scaling with the event count.</p>
+
+<h3 id="columns">The columns</h3>
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th>Column</th><th>Meaning</th><th>Use it to find</th></tr></thead>
+  <tbody>
+    <tr><td class="nowrap"><code>calls</code></td><td>Times the function was entered and matched with an exit.</td><td><strong>Exclusion candidates.</strong> The biggest numbers are your event volume.</td></tr>
+    <tr><td class="nowrap"><code>incl_ms</code></td><td>Wall time from enter to exit, children included. Recursive frames each count their own span.</td><td><strong>Which high-level operation is slow.</strong></td></tr>
+    <tr><td class="nowrap"><code>self_ms</code></td><td>Inclusive minus the time spent inside instrumented children.</td><td><strong>Where the work actually happens.</strong> The hot leaves.</td></tr>
+    <tr><td class="nowrap"><code>max_ms</code></td><td>The single slowest call.</td><td><strong>Tail latency.</strong> A small mean with a large max is a stall.</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="note">
+  <strong>Self time is only "self" relative to what you instrumented.</strong> Time spent
+  in an <em>excluded</em> callee is attributed to its caller, because no hook marked the
+  boundary. That is usually what you want — but it is why a function can look hot right
+  after you exclude the thing it calls.
+</div>
+
+<h3 id="summary">The summary line</h3>
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td class="nowrap"><code>events</code></td><td>Enter and exit records read across all trace files.</td></tr>
+    <tr><td class="nowrap"><code>threads</code></td><td>Distinct thread ids seen.</td></tr>
+    <tr><td class="nowrap"><code>functions</code></td><td>Distinct functions with at least one completed call.</td></tr>
+    <tr><td class="nowrap"><code>span</code></td><td>First to last timestamp across all threads.</td></tr>
+    <tr><td class="nowrap"><code>unmatched_exits</code></td><td>Exits with no matching enter. <strong>0 means a clean trace.</strong></td></tr>
+    <tr><td class="nowrap"><code>unclosed_enters</code></td><td>Frames still open at the end — normal: threads parked inside a call when the run ended, or when <code>TRACE_MAX</code> stopped collection mid-stack.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="flame">Flame graphs</h2>
+<p><code>--format folded</code> prints one collapsed stack per call path, with self time in
+nanoseconds — the input format that
+<a href="https://github.com/brendangregg/FlameGraph" target="_blank" rel="noopener">flamegraph.pl</a>
+and <a href="https://speedscope.app" target="_blank" rel="noopener">speedscope</a> read.</p>
+<pre><code><span class="p">$</span> callsight analyze traces/ --exe ./yourapp.instr --format folded &gt; out.folded
+<span class="p">$</span> head -2 out.folded
+thread_main;workload_matrix;workload_sleep;timer_adaptive_sleep;timer_sleep_us 93371544
+thread_main;workload_signal;workload_sleep;timer_adaptive_sleep;timer_sleep_us 91943551
+
+<span class="p">$</span> flamegraph.pl out.folded &gt; out.svg     <span class="c"># or drop out.folded into speedscope.app</span></code></pre>
+<div class="diagram">
+  <img src="assets/flamegraph.svg" alt="Flame graph of the matrixlab workload showing per-workload towers and the recursive fft and quicksort stacks" loading="lazy">
+  <p class="diagram-caption">
+    The bundled <code>matrixlab</code> workload — 1,000,000 events, 26 threads. The tall
+    narrow towers are the recursive <code>fft_recursive</code> and <code>qs_recursive</code>
+    call chains.
+  </p>
+</div>
+<p>Because the values are self time, the folded total equals the sum of the
+<code>self_ms</code> column — the flame graph and the table are two views of exactly the
+same numbers.</p>
+
+<h2 id="json">JSON for your own tooling</h2>
+<pre><code><span class="p">$</span> callsight analyze traces/ --exe ./yourapp.instr --format json --top 0 &gt; report.json</code></pre>
+<p>The whole report: summary counters, one row per function
+(<code>function</code>, <code>location</code>, <code>calls</code>, <code>incl_ms</code>,
+<code>self_ms</code>, <code>max_ms</code>), and a <code>per_thread</code> array. Rows come
+sorted by self time; <code>--top 0</code> keeps every one of them.</p>
+<pre><code>{
+  "events": 1000000,
+  "threads": 26,
+  "functions": 139,
+  "span_ms": 48.697,
+  "unmatched_exits": 0,
+  "unclosed_enters": 136,
+  "rows": [
+    { "function": "timer_sleep_us", "location": "src/utils/timer.c:38",
+      "calls": 272, "incl_ms": 529.382, "self_ms": 529.382, "max_ms": 9.983 }
+  ],
+  "per_thread": [ { "tid": 60475, "events": 39104, "span_ms": 44.9 } ],
+  "tool": "callsight", "version": "0.3.0"
+}</code></pre>
+<p>Two obvious uses: diffing two runs to see whether a fix helped, and asserting in CI that
+a function's call count or self time hasn't regressed.</p>
+
+<h2 id="workflow">The tightening loop</h2>
+<ol>
+  <li><strong>Run wide.</strong> No <code>include</code> lines — instrument everything,
+    with a <code>TRACE_MAX</code> so the run stays bounded.</li>
+  <li><strong>Sort by <code>calls</code>.</strong> The top rows are usually tiny leaf
+    helpers: accessors, swaps, hashes, RNG.</li>
+  <li><strong>Exclude them</strong> in <code>trace.config</code> and rebuild. Volume
+    typically drops 10–100× and the structure gets clearer, not worse.</li>
+  <li><strong>Now read <code>self_ms</code>.</strong> With the noise gone, the real hot
+    leaves are visible.</li>
+  <li><strong>Zoom in.</strong> <code>include-func &lt;entry point&gt;</code> to trace one
+    task's subtree and nothing else.</li>
+</ol>
+
+<h2 id="troubleshooting">When a trace looks wrong</h2>
+
+<h3 id="tr-symbols">Every function is <code>??</code></h3>
+<p>The binary was linked as a position-independent executable, so recorded runtime
+addresses don't match link addresses. <code>analyze</code> warns when most addresses fail
+to resolve. Relink with <code>-no-pie</code> — both build integrations already do.</p>
+
+<h3 id="tr-missing">A function I expected is missing</h3>
+<ul>
+  <li>It was <strong>inlined</strong> — no call boundary means no hook. Check with
+    <code>nm</code>, or build that file at a lower optimization level.</li>
+  <li>It is excluded — run <code>callsight scan . --config trace.config</code> to see the
+    selection.</li>
+  <li>It is only reached through a <strong>function pointer</strong> and you used
+    <code>include-func</code>: static call-graph resolution can't follow those.</li>
+  <li>It never returned during the trace — only completed calls appear in the table.</li>
+</ul>
+
+<h3 id="tr-unmatched"><code>unmatched_exits</code> is not zero</h3>
+<p>Some exits had no matching enter. Normal causes: <code>TRACE_THREADS</code> activating a
+thread mid-call (events before the match are absent by design), a
+<code>TRACE_MAX</code> cap hit mid-stack, or a truncated tail from a killed process. A
+large count with none of those in play is worth reporting.</p>
+
+<h3 id="tr-addr2line"><code>addr2line not found</code></h3>
+<p>Install binutils (<code>apt install binutils</code>), or put the matching
+cross-toolchain <code>addr2line</code> on <code>PATH</code> when analyzing a trace from
+another architecture.</p>
+
+<h3 id="tr-empty">No trace files</h3>
+<p>The run needs <code>TRACE_ENABLE=1</code> — without it the hooks are inert by design.
+Check <code>TRACE_DIR</code>, and remember that the process must exit cleanly (or the
+threads must finish) for the last buffers to flush.</p>
+
+<div class="next-links">
+  <a class="next-link" href="configuration.html"><strong>Configuration &rarr;</strong><span>Turn what you learned into a tighter selection.</span></a>
+  <a class="next-link" href="web-ui.html"><strong>Web UI &rarr;</strong><span>The same report, sortable, in a browser.</span></a>
+</div>
+
+</main>
+
+<aside class="toc">
+  <div class="toc-label">On this page</div>
+  <ul>
+    <li><a href="#report">The report</a></li>
+    <li class="sub"><a href="#columns">The columns</a></li>
+    <li class="sub"><a href="#summary">The summary line</a></li>
+    <li><a href="#flame">Flame graphs</a></li>
+    <li><a href="#json">JSON output</a></li>
+    <li><a href="#workflow">The tightening loop</a></li>
+    <li><a href="#troubleshooting">When a trace looks wrong</a></li>
+  </ul>
+</aside>
+</div>
+
+<footer>
+  <div class="foot-row">
+    <a href="./">Home</a>
+    <a href="getting-started.html">Getting started</a>
+    <a href="configuration.html">Configuration</a>
+    <a href="web-ui.html">Web UI</a>
+    <a href="streaming.html">Streaming</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="reference.html">Reference</a>
+    <a href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener">GitHub</a>
+  </div>
+  <div>MIT licensed · built for people who profile C and C++ on Linux</div>
+</footer>
+
+<script src="assets/docs.js"></script>
+</body>
+</html>

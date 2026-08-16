@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>callsight — Compile-time function tracing for C/C++</title>
+<meta name="description" content="Add entry/exit tracing to every function in a C/C++ project at compile time, with zero source edits. One config file decides what gets instrumented; excluded code emits no hook at all. Hotspot reports, flame graphs, and streaming from embedded devices.">
+<meta property="og:title" content="callsight — Compile-time function tracing for C/C++">
+<meta property="og:description" content="Exact per-call timing for the subsystem you choose. One trace.config decides what gets hooks at compile time — everything else costs literally nothing at runtime.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://harshithsunku.github.io/callsight/">
+<meta property="og:image" content="https://harshithsunku.github.io/callsight/screenshots/02-report.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="callsight — Compile-time function tracing for C/C++">
+<meta name="twitter:description" content="Zero source edits. One config file. Exact per-call timing, flame graphs, and device-to-server streaming.">
+<meta name="twitter:image" content="https://harshithsunku.github.io/callsight/screenshots/02-report.png">
+<meta name="theme-color" content="#0d1016">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav-inner">
+    <a class="brand" href="./">
+      <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="10.5" cy="10.5" r="6.5" stroke="#22d3ee" stroke-width="2"/>
+        <path d="M15.6 15.6 L21 21" stroke="#818cf8" stroke-width="2.4" stroke-linecap="round"/>
+        <path d="M7.5 11.5 l2 2.4 3.5-5.4" stroke="#22d3ee" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg><span>call<span class="a">sight</span></span></a>
+    <div class="topnav-links">
+      <a href="getting-started.html">Getting started</a>
+      <a href="configuration.html">Configuration</a>
+      <a href="analysis.html">Analysis</a>
+      <a href="web-ui.html">Web UI</a>
+      <a href="streaming.html">Streaming</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="reference.html">Reference</a>
+    </div>
+    <div class="topnav-right">
+      <a class="btn btn-ghost" href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener">GitHub</a>
+      <button class="theme-btn" id="theme-toggle" aria-label="Toggle theme" title="Toggle light/dark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="4"></circle>
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+        </svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="hero-inner">
+    <span class="eyebrow">Open source · MIT · Linux</span>
+    <h1>Trace every call you care about.<br><span class="grad">Pay nothing for the rest.</span></h1>
+    <p class="hero-lede">
+      callsight adds entry/exit timing hooks to a C or C++ project <strong>at compile
+      time, with zero edits to its sources</strong>. One <code>trace.config</code> decides
+      which files, folders, or call subtrees get hooks — and everything you exclude emits
+      <strong>no hook at all</strong>, so it costs exactly zero at runtime.
+    </p>
+    <div class="install"><span class="dollar">$</span><span class="cmd">uv tool install callsight</span></div>
+    <div class="hero-actions">
+      <a class="btn btn-primary" href="getting-started.html">Get started &rarr;</a>
+      <a class="btn btn-ghost" href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener">View on GitHub</a>
+    </div>
+    <div class="hero-badges">
+      <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-22d3ee?style=flat-square">
+      <img alt="PyPI" src="https://img.shields.io/pypi/v/callsight.svg?style=flat-square&color=818cf8">
+      <img alt="compilers" src="https://img.shields.io/badge/GCC-selective-34d399?style=flat-square">
+      <img alt="languages" src="https://img.shields.io/badge/C_%7C_C++-Make_%7C_CMake-9aa5b4?style=flat-square">
+      <img alt="overhead" src="https://img.shields.io/badge/hook-~30–60_ns-f59e0b?style=flat-square">
+    </div>
+    <div class="hero-shot">
+      <img src="assets/flamegraph.svg" alt="Flame graph of a multi-threaded C workload: thread_main splits into workload_matrix, workload_signal, workload_stats, workload_crypto and workload_sort, with the recursive fft and quicksort towers clearly visible" loading="eager">
+    </div>
+    <p class="shot-note">
+      A real trace of the bundled <code>matrixlab</code> workload — 1,000,000 events across
+      26 threads, exported with <code>callsight analyze --format folded</code> and rendered
+      as a flame graph.
+    </p>
+  </div>
+</header>
+
+<section class="section" id="what">
+  <div class="container">
+    <span class="eyebrow">What it does</span>
+    <h2>One config file, the whole tracing pipeline.</h2>
+    <p class="section-sub">
+      Compile-time selection, a lock-free per-thread runtime, exact per-call timing, and
+      a report you can read in the terminal, in a browser, or in a flame graph.
+    </p>
+    <div class="features">
+      <div class="feature">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h8l-1 8 10-12h-8l1-8z"/></svg>
+        </div>
+        <h3>Zero source edits</h3>
+        <p>Hooks come from <code>-finstrument-functions</code> at compile time. Your source
+        tree is never touched — adopting callsight adds a config file and a build include,
+        nothing else.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1"/></svg>
+        </div>
+        <h3>Selection that is free</h3>
+        <p>Excluded code is not compiled with hooks, so it does not check a flag, take a
+        branch, or touch a buffer. Runtime filters can't match that — the instruction
+        simply isn't there.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l3.5-4 3 2.5L20 7"/></svg>
+        </div>
+        <h3>Exact, not sampled</h3>
+        <p>Every call is counted and timed: calls, inclusive, self and max time per
+        function, matched per thread. No statistical blur, no missed rare-but-slow paths.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2c1.5 3.5-.5 5-1.5 6.5C9 11 9.5 13 12 14c2-1 2.5-3 1.5-5.5C16 10 18 12 18 15a6 6 0 0 1-12 0c0-3 2-5 6-13z"/></svg>
+        </div>
+        <h3>Flame graphs &amp; JSON</h3>
+        <p><code>--format folded</code> feeds flamegraph.pl and speedscope directly;
+        <code>--format json</code> gives you the whole report — counters, rows, per-thread
+        timing — for your own tooling.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5.5 5.5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1.2"/><path d="M1.5 9a15 15 0 0 1 21 0"/></svg>
+        </div>
+        <h3>Streams off the device</h3>
+        <p>On a constrained target the runtime writes into a shared-memory ring; a tiny C
+        client ships it ZSTD-compressed over TCP. The traced process does no disk or
+        network I/O, and a full ring drops events rather than stalling your workload.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg>
+        </div>
+        <h3>A browser front end</h3>
+        <p><code>callsight ui</code> walks the whole loop — browse a project, build the
+        config from checkboxes, compile, run, and read the hotspot table. No root, one
+        command.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section alt" id="how">
+  <div class="container">
+    <span class="eyebrow">How it works</span>
+    <h2>Compile, run, analyze.</h2>
+    <p class="section-sub">
+      Four stages. The only one that touches your build is the first, and it is driven
+      entirely by <code>trace.config</code>.
+    </p>
+    <div class="pipeline">
+      <div class="pipe-step">
+        <span class="pipe-num">01 · COMPILE</span>
+        <h3>Selection becomes flags</h3>
+        <p><code>callsight flags</code> turns <code>trace.config</code> plus your source
+        list into <code>-finstrument-functions</code> and the matching exclude lists. The
+        Make and CMake integrations call it for you on every build.</p>
+      </div>
+      <div class="pipe-step">
+        <span class="pipe-num">02 · RUN</span>
+        <h3>Hooks fill per-thread buffers</h3>
+        <p>The compiler emits <code>__cyg_profile_func_enter/exit</code> calls. The runtime
+        appends 32-byte events to a thread-local buffer — no locks, no malloc, no I/O on
+        the hot path — and stays inert unless <code>TRACE_ENABLE=1</code>.</p>
+      </div>
+      <div class="pipe-step">
+        <span class="pipe-num">03 · COLLECT</span>
+        <h3>Files, or a stream</h3>
+        <p>Buffers flush to <code>trace.&lt;pid&gt;.&lt;tid&gt;.bin</code>, or into a POSIX
+        shared-memory ring that the <code>trace_stream</code> client drains and forwards to
+        <code>callsight serve</code> on your workstation.</p>
+      </div>
+      <div class="pipe-step">
+        <span class="pipe-num">04 · ANALYZE</span>
+        <h3>Symbols and hotspots</h3>
+        <p><code>callsight analyze</code> streams the events, matches enter/exit per thread,
+        resolves addresses through <code>addr2line</code> — <code>static</code> functions
+        included — and prints, exports, or serves the report.</p>
+      </div>
+    </div>
+
+    <div class="diagram" style="margin-top:34px">
+      <svg class="dg" viewBox="0 0 980 310" role="img" aria-label="callsight architecture: compile-time selection, per-thread runtime buffers, file or shared-memory-ring sinks, and offline analysis">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" class="dg-arrow"/>
+          </marker>
+          <marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" class="dg-arrow accent"/>
+          </marker>
+        </defs>
+
+        <text x="275" y="24" class="dg-phase">COMPILE TIME · YOUR BUILD</text>
+        <rect x="20" y="40" width="140" height="54" rx="9" class="dg-box"/>
+        <text x="90" y="63" class="dg-label">your sources</text>
+        <text x="90" y="81" class="dg-sub">never modified</text>
+
+        <rect x="410" y="40" width="140" height="54" rx="9" class="dg-box warm"/>
+        <text x="480" y="63" class="dg-label">trace.config</text>
+        <text x="480" y="81" class="dg-sub">what gets hooks</text>
+
+        <rect x="205" y="40" width="150" height="54" rx="9" class="dg-box accent"/>
+        <text x="280" y="62" class="dg-mono">-finstrument-</text>
+        <text x="280" y="76" class="dg-mono">functions</text>
+        <text x="280" y="90" class="dg-sub">+ exclude lists</text>
+
+        <line x1="160" y1="67" x2="201" y2="67" class="dg-line" marker-end="url(#ar)"/>
+        <line x1="410" y1="67" x2="359" y2="67" class="dg-line accent" marker-end="url(#ara)"/>
+
+        <text x="215" y="132" class="dg-phase">RUNTIME · TRACED PROCESS</text>
+        <rect x="20" y="148" width="170" height="54" rx="9" class="dg-box"/>
+        <text x="105" y="170" class="dg-label">__cyg_profile hooks</text>
+        <text x="105" y="188" class="dg-sub">32-byte events</text>
+
+        <rect x="240" y="148" width="170" height="54" rx="9" class="dg-box"/>
+        <text x="325" y="170" class="dg-label">per-thread buffer</text>
+        <text x="325" y="188" class="dg-sub">lock-free, no malloc</text>
+
+        <rect x="460" y="120" width="150" height="50" rx="9" class="dg-box"/>
+        <text x="535" y="140" class="dg-label">trace.*.bin</text>
+        <text x="535" y="157" class="dg-sub">local files</text>
+
+        <rect x="460" y="182" width="150" height="50" rx="9" class="dg-box accent"/>
+        <text x="535" y="202" class="dg-label">shm ring</text>
+        <text x="535" y="219" class="dg-sub">drops, never blocks</text>
+
+        <line x1="105" y1="94" x2="105" y2="144" class="dg-line" marker-end="url(#ar)"/>
+        <line x1="190" y1="175" x2="236" y2="175" class="dg-line" marker-end="url(#ar)"/>
+        <path d="M410 168 L435 168 L435 145 L456 145" class="dg-line" marker-end="url(#ar)"/>
+        <path d="M410 182 L435 182 L435 207 L456 207" class="dg-line accent" marker-end="url(#ara)"/>
+
+        <text x="810" y="132" class="dg-phase">ANALYSIS HOST</text>
+        <rect x="680" y="182" width="160" height="50" rx="9" class="dg-box accent"/>
+        <text x="760" y="202" class="dg-label">trace_stream</text>
+        <text x="760" y="219" class="dg-sub">zstd · raw TCP</text>
+
+        <rect x="680" y="120" width="160" height="50" rx="9" class="dg-box"/>
+        <text x="760" y="140" class="dg-label">callsight serve</text>
+        <text x="760" y="157" class="dg-sub">writes trace files</text>
+
+        <rect x="590" y="256" width="330" height="48" rx="9" class="dg-box good"/>
+        <text x="755" y="276" class="dg-label">callsight analyze · web UI · flame graph</text>
+        <text x="755" y="293" class="dg-sub">calls · inclusive · self · max, per thread</text>
+
+        <line x1="610" y1="207" x2="676" y2="207" class="dg-line accent" marker-end="url(#ara)"/>
+        <line x1="760" y1="182" x2="760" y2="174" class="dg-line accent" marker-end="url(#ara)"/>
+        <path d="M535 170 L535 280 L586 280" class="dg-line" marker-end="url(#ar)"/>
+        <path d="M840 145 L890 145 L890 252" class="dg-line" marker-end="url(#ar)"/>
+      </svg>
+      <p class="diagram-caption">
+        The streaming path (cyan) is optional — without it, buffers flush straight to trace
+        files next to your binary.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="selection">
+  <div class="container">
+    <span class="eyebrow">The idea</span>
+    <h2>Event volume is the whole game.</h2>
+    <p class="section-sub">
+      A call-heavy program generates millions of events per second. Every tracer has to
+      answer "how do I record less?" — callsight answers it in the compiler, before a
+      single instruction is emitted.
+    </p>
+    <div class="split-2">
+      <div>
+        <h3 style="margin-bottom:10px">Write what you want traced</h3>
+        <pre><code><span class="c"># trace.config</span>
+<span class="k">include</span> src/network/        <span class="c"># only this subsystem</span>
+<span class="k">exclude</span> src/network/crc.c   <span class="c"># except the chatty helper</span>
+<span class="k">exclude-func</span> log_printf      <span class="c"># and this one, by name</span>
+
+<span class="c"># or select one task's whole call subtree:</span>
+<span class="k">include-func</span> handle_request  <span class="c"># + everything it calls</span></code></pre>
+        <p style="color:var(--text-secondary);font-size:14.5px;margin-top:12px">
+          <code>include-func</code> resolves the call graph statically from your sources,
+          so naming one entry point selects exactly its subtree — explore it first with
+          <code>callsight select src/ --function handle_request</code>.
+        </p>
+      </div>
+      <div>
+        <h3 style="margin-bottom:10px">See what it selects, before building</h3>
+        <pre><code><span class="p">$</span> callsight scan . --config trace.config
+35 sources: 34 instrumented, 1 excluded
+  excluded: src/utils/rng.c
+
+<span class="p">$</span> callsight select src/ --function workload_sort
+workload_sort: <span class="n">31</span> functions across 6 files
+    heapsort
+    mergesort
+    qs_partition
+    …
+
+<span class="c"># add to trace.config:</span>
+include-func workload_sort</code></pre>
+      </div>
+    </div>
+    <div class="note" style="margin-top:26px">
+      <strong>Why compile-time?</strong> A runtime filter still pays for the hook: the call
+      happens, the check runs, the branch is predicted. Compile-time exclusion removes the
+      call site entirely. Running wide once and then excluding the chatty leaf helpers
+      typically cuts event volume by 10–100×.
+    </div>
+  </div>
+</section>
+
+<section class="section alt" id="report">
+  <div class="container">
+    <span class="eyebrow">The output</span>
+    <h2>A report you can act on.</h2>
+    <p class="section-sub">
+      Sort by <strong>self time</strong> for hot leaves, by <strong>inclusive time</strong>
+      for the slow high-level operation, by <strong>calls</strong> to find your next
+      exclusion. <code>unmatched_exits=0</code> means the trace is clean.
+    </p>
+    <pre><code><span class="p">$</span> callsight analyze traces/ --exe bin/matrixlab.instr --top 5
+events=<span class="n">1000000</span> threads=<span class="n">26</span> functions=<span class="n">139</span> span=48.7ms <span class="s">unmatched_exits=0</span> unclosed_enters=136
+
+== TOP BY SELF TIME ==
+     calls      incl_ms      self_ms       max_ms  function (first location)
+       272      529.382      529.382        9.983  timer_sleep_us (src/utils/timer.c:38)
+    127048       52.470       52.470        6.643  qs_swap (src/sort/quicksort.c:5)
+     57284      366.418       35.370        5.738  fft_recursive (src/signal/fft.c:63)
+    104870       33.523       33.523       10.017  stats_running_push (src/stats/statistics.c:84)
+      3195       60.699       30.238       18.485  qs_partition (src/sort/quicksort.c:23)</code></pre>
+    <div class="shots" style="margin-top:30px">
+      <div class="shot">
+        <img src="screenshots/02-report.png" alt="The callsight web UI hotspot table: sortable columns for calls, inclusive ms, self ms and max ms, with resolved function names and source locations" loading="lazy">
+        <div class="shot-caption"><strong>The same report in the browser</strong>Sortable columns, resolved source locations, and the clean-trace check.</div>
+      </div>
+      <div class="shot">
+        <img src="screenshots/03-config-builder.png" alt="The callsight config builder: a checkbox pane of 35 source files beside a searchable pane of 315 functions, generating trace.config" loading="lazy">
+        <div class="shot-caption"><strong>Build the config by clicking</strong>Files and functions enumerated with ctags, filtered live, written out as <code>trace.config</code>.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="quickstart">
+  <div class="container">
+    <span class="eyebrow">Quick start</span>
+    <h2>Four commands in.</h2>
+    <p class="section-sub">Adopt an existing project without changing a line of its code.</p>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h3>Install</h3>
+          <p>Stdlib-only Python core; the extras are optional.</p>
+          <pre><code><span class="p">$</span> uv tool install callsight        <span class="c"># or 'callsight[ui]' for the web UI</span></code></pre>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h3>Adopt</h3>
+          <p>Copies the hook runtime and the build wiring, writes a starter
+          <code>trace.config</code>, and prints the snippet for your build system.</p>
+          <pre><code><span class="p">$</span> cd /path/to/your/project
+<span class="p">$</span> callsight init .</code></pre>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h3>Build and run</h3>
+          <p>The instrumented profile is separate from your normal build, and stays inert
+          until you ask for a trace.</p>
+          <div data-tabs>
+            <div class="tabs">
+              <button class="tab-btn active" data-tab="make">Make</button>
+              <button class="tab-btn" data-tab="cmake">CMake</button>
+            </div>
+            <div class="tab-panel active" data-tab="make">
+              <pre><code><span class="p">$</span> make instrument
+<span class="p">$</span> TRACE_ENABLE=1 TRACE_MAX=1000000 ./bin/yourapp.instr</code></pre>
+            </div>
+            <div class="tab-panel" data-tab="cmake">
+              <pre><code><span class="p">$</span> cmake -DCALLSIGHT_INSTRUMENT=ON -B build-instr
+<span class="p">$</span> cmake --build build-instr
+<span class="p">$</span> TRACE_ENABLE=1 TRACE_MAX=1000000 ./build-instr/yourapp</code></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <h3>Analyze</h3>
+          <p>Terminal tables, a flame graph, or JSON for your own tooling.</p>
+          <pre><code><span class="p">$</span> callsight analyze traces/ --exe ./bin/yourapp.instr --top 20
+<span class="p">$</span> callsight analyze traces/ --exe ./bin/yourapp.instr --format folded &gt; out.folded</code></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section alt" id="compare">
+  <div class="container">
+    <span class="eyebrow">Where it fits</span>
+    <h2>How it compares.</h2>
+    <p class="section-sub">
+      Reach for <code>perf</code> first when you want a cheap statistical profile of a whole
+      system. Reach for callsight when you need exact per-call timing for a chosen
+      subsystem — and zero cost for everything else.
+    </p>
+    <div class="table-scroll">
+      <table class="ref">
+        <thead>
+          <tr><th>Tool</th><th>Granularity</th><th>Selection</th><th>Needs</th></tr>
+        </thead>
+        <tbody>
+          <tr class="me">
+            <td><strong>callsight</strong></td>
+            <td>Every entry/exit, exact timing</td>
+            <td><strong>Compile time, from one config file</strong> — excluded code emits no hook at all</td>
+            <td>Rebuild with GCC</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/namhyung/uftrace" target="_blank" rel="noopener">uftrace</a></td>
+            <td>Same mechanism, richer live TUI and replay</td>
+            <td>Mostly runtime filters (<code>-F</code>/<code>-N</code>), so filtered functions still pay for the hook</td>
+            <td>Rebuild (<code>-pg</code> / <code>-finstrument-functions</code>)</td>
+          </tr>
+          <tr>
+            <td><code>perf record</code></td>
+            <td>Sampled, statistical</td>
+            <td>None needed</td>
+            <td>No rebuild; often root or <code>perf_event_paranoid</code></td>
+          </tr>
+          <tr>
+            <td>gprof (<code>-pg</code>)</td>
+            <td>Sampled + call counts</td>
+            <td>None</td>
+            <td>Rebuild; single-threaded accounting</td>
+          </tr>
+          <tr>
+            <td>Clang XRay</td>
+            <td>Entry/exit with runtime patching</td>
+            <td>Per-function attributes and lists</td>
+            <td>Rebuild, Clang only</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note warn">
+      <strong>Compiler note.</strong> Selective instrumentation requires <strong>GCC</strong>:
+      the <code>-finstrument-functions-exclude-*</code> flags it builds on are GCC-only
+      (<a href="https://github.com/llvm/llvm-project/issues/15627" target="_blank" rel="noopener">LLVM #15627</a>).
+      Clang can instrument <em>everything</em> — a config with no <code>include</code>/<code>exclude</code>
+      directives — and callsight detects the toolchain and tells you up front instead of
+      letting the build fail one file at a time.
+    </div>
+  </div>
+</section>
+
+<section class="cta">
+  <div class="container">
+    <h2>Point it at your project.</h2>
+    <p>Two commands to adopt, and nothing in your source tree changes.</p>
+    <div class="hero-actions" style="margin-bottom:0">
+      <a class="btn btn-primary" href="getting-started.html">Read the guide &rarr;</a>
+      <a class="btn btn-ghost" href="reference.html">CLI reference</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="foot-row">
+    <a href="getting-started.html">Getting started</a>
+    <a href="configuration.html">Configuration</a>
+    <a href="analysis.html">Analysis</a>
+    <a href="web-ui.html">Web UI</a>
+    <a href="streaming.html">Streaming</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="reference.html">Reference</a>
+    <a href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://pypi.org/project/callsight/" target="_blank" rel="noopener">PyPI</a>
+  </div>
+  <div>MIT licensed · built for people who profile C and C++ on Linux</div>
+</footer>
+
+<script src="assets/docs.js"></script>
+</body>
+</html>

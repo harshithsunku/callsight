@@ -5,8 +5,12 @@ callsight — compile-time function tracing for C/C++ projects.
 Subcommands:
   init     adopt callsight into a project (copies runtime + build wiring)
   scan     show which sources a trace.config would instrument
+  select   explore a function's call subtree; emit trace.config lines
   flags    print compiler flags (used by Make/CMake integrations)
-  analyze  offline hotspot report from a traces/ directory
+  analyze  offline report from a traces/ directory: hotspot tables, JSON,
+           or folded stacks for flame graphs
+  ui       local web UI (needs callsight[ui])
+  serve    TCP server for remote trace streams (needs callsight[stream])
   provision  download the bundled static ctags into $CALLSIGHT_HOME/bin
 """
 
@@ -362,7 +366,9 @@ def main(argv=None):
 
     sub.add_parser("flags", help="print compiler flags "
                                  "(build-system integration)")
-    sub.add_parser("analyze", help="hotspot report from traces/")
+    sub.add_parser("analyze", help="report from traces/: hotspot tables, "
+                                   "--format json, or --format folded "
+                                   "(flame graphs)")
 
     args = ap.parse_args(argv)
     args.func(args)

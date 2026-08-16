@@ -3,7 +3,10 @@ name: pages
 on:
   push:
     branches: [main]
-    paths: [docs/**, mkdocs.yml, STATUS.md, .github/workflows/pages.yml]
+    paths:
+      - docs/**
+      - .github/scripts/check_docs_links.py
+      - .github/workflows/pages.yml
 
 permissions:
   pages: write
@@ -14,15 +17,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The docs are a hand-built static site under docs/ — no generator step.
+  # Check the links resolve, then publish the directory as-is.
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: uv run --group docs mkdocs build --strict
+      - name: Check internal links and assets resolve
+        run: python3 .github/scripts/check_docs_links.py docs
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site/
+          path: docs/
 
   deploy:
     needs: build

@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Architecture — callsight</title>
+<meta name="description" content="How callsight works inside: the compile-time selection pass, the lock-free per-thread hook runtime, the 32-byte event record, the streaming analyzer, and a survey of every GCC/Clang instrumentation mechanism.">
+<meta property="og:title" content="Architecture — callsight">
+<meta property="og:description" content="The hook runtime, the event record, the analyzer — and a survey of every compile-time instrumentation mechanism GCC and Clang offer.">
+<meta name="theme-color" content="#0d1016">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav-inner">
+    <a class="brand" href="./">
+      <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="10.5" cy="10.5" r="6.5" stroke="#22d3ee" stroke-width="2"/>
+        <path d="M15.6 15.6 L21 21" stroke="#818cf8" stroke-width="2.4" stroke-linecap="round"/>
+        <path d="M7.5 11.5 l2 2.4 3.5-5.4" stroke="#22d3ee" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg><span>call<span class="a">sight</span></span></a>
+    <div class="topnav-links">
+      <a href="getting-started.html">Getting started</a>
+      <a href="configuration.html">Configuration</a>
+      <a href="analysis.html">Analysis</a>
+      <a href="web-ui.html">Web UI</a>
+      <a href="streaming.html">Streaming</a>
+      <a href="architecture.html" class="active">Architecture</a>
+      <a href="reference.html">Reference</a>
+    </div>
+    <div class="topnav-right">
+      <a class="btn btn-ghost" href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener">GitHub</a>
+      <button class="theme-btn" id="theme-toggle" aria-label="Toggle theme" title="Toggle light/dark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="4"></circle>
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+        </svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<header class="page-head">
+  <div class="container">
+    <span class="eyebrow">Internals</span>
+    <h1>Architecture</h1>
+    <p>What happens between "you edited <code>trace.config</code>" and "here is your
+    hotspot table" — and why each piece is built the way it is.</p>
+  </div>
+</header>
+
+<div class="layout-with-toc">
+<main class="prose">
+
+<h2 id="overview">The four stages</h2>
+<div class="diagram">
+  <svg class="dg" viewBox="0 0 940 300" role="img" aria-label="callsight internals: flags generation at compile time, hooks and per-thread buffers at runtime, file or ring sinks, and the streaming analyzer">
+    <defs>
+      <marker id="a-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="dg-arrow"/>
+      </marker>
+      <marker id="a-ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="dg-arrow accent"/>
+      </marker>
+    </defs>
+
+    <text x="140" y="26" class="dg-phase">1 · SELECT</text>
+    <rect x="20" y="40" width="240" height="72" rx="10" class="dg-box warm"/>
+    <text x="140" y="64" class="dg-label">trace.config → flags.py</text>
+    <text x="140" y="82" class="dg-sub">patterns, call graph, exclude lists</text>
+    <text x="140" y="100" class="dg-mono">callsight flags</text>
+
+    <text x="470" y="26" class="dg-phase">2 · COMPILE</text>
+    <rect x="345" y="40" width="250" height="72" rx="10" class="dg-box accent"/>
+    <text x="470" y="64" class="dg-label">GCC emits hook calls</text>
+    <text x="470" y="82" class="dg-mono">__cyg_profile_func_enter</text>
+    <text x="470" y="100" class="dg-sub">excluded code: nothing emitted</text>
+
+    <text x="800" y="26" class="dg-phase">3 · RECORD</text>
+    <rect x="680" y="40" width="240" height="72" rx="10" class="dg-box"/>
+    <text x="800" y="64" class="dg-label">trace.c runtime</text>
+    <text x="800" y="82" class="dg-sub">TLS buffer · 8192 events</text>
+    <text x="800" y="100" class="dg-sub">no locks · no malloc · no I/O</text>
+
+    <line x1="260" y1="76" x2="341" y2="76" class="dg-line" marker-end="url(#a-ar)"/>
+    <line x1="595" y1="76" x2="676" y2="76" class="dg-line" marker-end="url(#a-ar)"/>
+
+    <rect x="680" y="160" width="240" height="56" rx="10" class="dg-box"/>
+    <text x="800" y="182" class="dg-label">flush on full / at exit</text>
+    <text x="800" y="200" class="dg-mono">trace.&lt;pid&gt;.&lt;tid&gt;.bin</text>
+    <line x1="800" y1="112" x2="800" y2="156" class="dg-line" marker-end="url(#a-ar)"/>
+
+    <text x="250" y="150" class="dg-phase">4 · ANALYZE</text>
+    <rect x="20" y="160" width="560" height="56" rx="10" class="dg-box good"/>
+    <text x="300" y="182" class="dg-label">streaming matcher → addr2line → report</text>
+    <text x="300" y="200" class="dg-sub">events matched as they are read; memory stays flat</text>
+    <line x1="676" y1="188" x2="584" y2="188" class="dg-line" marker-end="url(#a-ar)"/>
+
+    <rect x="20" y="244" width="270" height="44" rx="9" class="dg-box"/>
+    <text x="155" y="271" class="dg-label">text tables · JSON · folded stacks</text>
+    <rect x="310" y="244" width="270" height="44" rx="9" class="dg-box"/>
+    <text x="445" y="271" class="dg-label">web UI · flame graph</text>
+    <line x1="155" y1="216" x2="155" y2="240" class="dg-line" marker-end="url(#a-ar)"/>
+    <line x1="445" y1="216" x2="445" y2="240" class="dg-line" marker-end="url(#a-ar)"/>
+  </svg>
+</div>
+
+<h2 id="selection">1 · Selection becomes compiler flags</h2>
+<p><code>callsight flags</code> reads <code>trace.config</code> and the source list your
+build system passes it, and prints the flag string the compiler should use. Both build
+integrations call it on every build, so the selection is always current.</p>
+<ul>
+  <li><strong>File selection</strong> maps to
+    <code>-finstrument-functions-exclude-file-list</code>. Sources that are <em>not</em>
+    selected are listed as exclusions — GCC matches the list against the file each function
+    is <em>defined</em> in, which is why header paths work for silencing inline helpers.</li>
+  <li><strong>Function selection</strong> maps to
+    <code>-finstrument-functions-exclude-function-list</code>, a substring match on symbol
+    names.</li>
+  <li><strong><code>include-func</code></strong> compiles down to those two primitives:
+    the files defining the subtree are instrumented, and every other function defined in
+    those files is added to the function exclude list.</li>
+</ul>
+<div class="note">
+  <strong>The substring-collision guard.</strong> Because the compiler's function exclude
+  list is a <em>substring</em> match, an auto-generated exclusion that happens to be a
+  substring of a selected function would silently disable the function you asked for.
+  callsight detects that case, drops the offending entry, and warns instead.
+</div>
+
+<h3 id="callgraph">The static call graph</h3>
+<p><code>include-func</code> needs to know what a function calls. callsight uses a
+deliberately lightweight heuristic parser (comments and string literals blanked,
+definitions matched at line starts, call sites matched inside the body) rather than pulling
+in libclang — adoption stays a single <code>uv tool install</code> with no toolchain
+dependency.</p>
+<p>The trade-off is documented rather than hidden: <strong>function pointers,
+macro-generated calls and C++ dynamic dispatch are not followed</strong>. The expansion is
+breadth-first, so a depth limit always measures the <em>shortest</em> path to each
+function.</p>
+
+<h2 id="runtime">2 · The hook runtime</h2>
+<p><code>trace.c</code> is self-contained C with no dependencies beyond pthreads, compiled
+<strong>without</strong> <code>-finstrument-functions</code> and with
+<code>no_instrument_function</code> on every function, so the hooks can never trigger
+themselves.</p>
+<ul>
+  <li><strong>All state is per-thread</strong> (TLS): an 8192-event buffer, the output
+    handle, the thread id. There are no locks on the hot path in file mode.</li>
+  <li><strong>Inert unless enabled.</strong> Without <code>TRACE_ENABLE=1</code> each hook
+    is one predictable branch and a return.</li>
+  <li><strong>No symbolization at runtime.</strong> Events carry raw addresses; names are
+    resolved offline. That is what keeps a hook at tens of nanoseconds.</li>
+  <li><strong>No malloc, no I/O on the hot path.</strong> The buffer flushes when full, at
+    thread exit (via a pthread key destructor), and at process exit.</li>
+  <li><strong>Reentrancy guard</strong> per thread, so a hook can never recurse through
+    the code it calls.</li>
+</ul>
+
+<h3 id="event">The event record</h3>
+<p>32 bytes, fixed layout, little-endian — the same on disk and on the wire.</p>
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th>Field</th><th>Type</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>ts_ns</code></td><td><code>u64</code></td><td><code>CLOCK_MONOTONIC_RAW</code> nanoseconds</td></tr>
+    <tr><td><code>func_addr</code></td><td><code>u64</code></td><td>Address of the entered/exited function</td></tr>
+    <tr><td><code>caller_addr</code></td><td><code>u64</code></td><td>Return address in the caller</td></tr>
+    <tr><td><code>tid</code></td><td><code>u32</code></td><td>Kernel thread id</td></tr>
+    <tr><td><code>kind</code></td><td><code>u8</code></td><td>0 = enter, 1 = exit</td></tr>
+    <tr><td><code>_pad</code></td><td><code>u8[3]</code></td><td>Padding to 32 bytes</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Each trace file starts with a 16-byte header: an <code>MLTRACE</code> magic, a format
+version, and the event size — so a mismatched or truncated file is detected and skipped
+rather than misread.</p>
+
+<h2 id="analyzer">3 · The analyzer</h2>
+<p>Analysis is a single streaming pass. Events are read in blocks and matched as they
+arrive, so analyzer memory tracks the number of <em>functions and threads</em>, not the
+number of events — a multi-million-event trace costs a few MB.</p>
+<ol>
+  <li><strong>Match per thread.</strong> Each thread has its own stack. An exit pops back
+    to the nearest matching enter, closing any frames left dangling above it (which happens
+    after a <code>longjmp</code>, or when a buffer tail is lost).</li>
+  <li><strong>Attribute time.</strong> Inclusive time is exit minus enter; the duration is
+    also credited to the parent frame's "children" total, and self time is inclusive minus
+    children.</li>
+  <li><strong>Resolve symbols.</strong> All distinct addresses go to <code>addr2line</code>
+    in batches, once, at the end — <code>static</code> functions included.</li>
+  <li><strong>Emit.</strong> Text tables, JSON, or folded stacks. Folded output is
+    accumulated during the same pass, keyed by the tuple of addresses on the live
+    stack.</li>
+</ol>
+<p>Because everything is derived from the same pass, the flame graph and the
+<code>self_ms</code> column are guaranteed to agree.</p>
+
+<h2 id="mechanisms">Compiler mechanisms surveyed</h2>
+<p>What each compile-time instrumentation mechanism can do, what it costs, and how it maps
+to callsight. Overhead figures are order-of-magnitude, per event, assuming a lean hook.</p>
+<div class="table-scroll">
+<table class="ref">
+  <thead>
+    <tr><th>Mechanism</th><th>Compilers</th><th>Granularity</th><th>Runtime toggle</th><th>Overhead/event</th><th>Verdict</th></tr>
+  </thead>
+  <tbody>
+    <tr class="me">
+      <td class="nowrap"><code>-finstrument-functions</code></td><td>GCC, Clang</td><td>Function entry/exit</td><td>No (compile-time)</td><td>~30–60 ns</td><td><strong>Default backend</strong></td>
+    </tr>
+    <tr>
+      <td class="nowrap"><code>-finstrument-functions-after-inlining</code></td><td>Clang</td><td>Post-inline entry/exit</td><td>No</td><td>~30–60 ns</td><td>Clang enhancement</td>
+    </tr>
+    <tr>
+      <td class="nowrap"><code>-pg</code> (mcount/gprof)</td><td>GCC, Clang</td><td>Function entry</td><td>No</td><td>~50–100 ns</td><td>Legacy, rejected</td>
+    </tr>
+    <tr>
+      <td class="nowrap"><code>-fpatchable-function-entry</code></td><td>GCC ≥ 8, Clang ≥ 11</td><td>NOP sleds at entry</td><td><strong>Yes</strong> (patch sleds)</td><td>~0 off, few ns on</td><td>Roadmap candidate</td>
+    </tr>
+    <tr>
+      <td class="nowrap"><code>-fsanitize-coverage</code></td><td>Clang, GCC ≥ 12</td><td>Edge / PC guard</td><td>No</td><td>~5–20 ns</td><td>Alternative backend, evaluating</td>
+    </tr>
+    <tr>
+      <td class="nowrap">XRay (<code>-fxray-instrument</code>)</td><td>Clang</td><td>Entry/exit sleds</td><td><strong>Yes</strong> (official API)</td><td>~0 when off</td><td>Design reference</td>
+    </tr>
+    <tr>
+      <td class="nowrap"><code>-fprofile-arcs</code> (gcov)</td><td>GCC, Clang</td><td>Edge counters</td><td>No</td><td>Counter inc</td><td>Out of scope (no timing)</td>
+    </tr>
+    <tr>
+      <td class="nowrap">GCC plugin API</td><td>GCC (version-locked)</td><td>Arbitrary (GIMPLE)</td><td>Possible</td><td>Varies</td><td>Non-goal</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h3 id="m-instrument"><code>-finstrument-functions</code> — the current backend</h3>
+<p>Emits a call to <code>__cyg_profile_func_enter(this_fn, call_site)</code> and
+<code>__cyg_profile_func_exit(...)</code> at every function boundary, <code>static</code>
+functions included. Selection happens at compile time through the two exclude lists, both
+substring-matched, with the file list matched against the file a function is <em>defined</em>
+in. Excluded code emits no hook at all, so selection is free at runtime.</p>
+<p>Caveats: inlined functions emit no hooks, because no call boundary exists; hooks fire
+even when you don't want data, so runtime gating costs a flag check per event; and
+<code>-no-pie</code> (or offset bookkeeping) is needed to map addresses back to symbols.</p>
+<div class="note warn">
+  <strong>The exclude lists are GCC-only.</strong> Clang implements
+  <code>-finstrument-functions</code> but has never taken the exclusion patches
+  (<a href="https://github.com/llvm/llvm-project/issues/15627" target="_blank" rel="noopener">LLVM&nbsp;#15627</a>),
+  and its driver rejects unknown arguments outright. So a selective config requires GCC;
+  under Clang only an unfiltered "instrument everything" config compiles.
+  <code>callsight flags</code> detects the toolchain (<code>--compiler-cmd</code>, passed by
+  both build integrations) and reports this before the build rather than letting it fail
+  once per translation unit. Giving Clang real file-level selection would mean applying
+  <code>-finstrument-functions</code> per translation unit instead of globally — a
+  build-integration change, not a flag change.
+</div>
+
+<h3 id="m-afterinlining"><code>-finstrument-functions-after-inlining</code></h3>
+<p>Same hooks, inserted <em>after</em> inlining, so functions that survived inlining get
+hooked even when they were inlined at some call sites, and you see the real optimized call
+graph. A candidate extra flag on Clang toolchains; it needs an analyzer-side note that the
+call graph differs from the source-level one.</p>
+
+<h3 id="m-pg"><code>-pg</code> / mcount (gprof)</h3>
+<p>The original: an entry-only hook into <code>mcount</code>, plus flat-profile sampling.
+Call-graph arcs only — no per-call exit timing — with PLT and shared-library blind spots
+and effectively unmaintained semantics under modern optimization. Documented for
+completeness; callsight does not use it.</p>
+
+<h3 id="m-patchable"><code>-fpatchable-function-entry=N,M</code></h3>
+<p>Emits <code>N</code> NOPs at function entry (<code>M</code> of them before the prologue)
+plus a <code>__patchable_function_entries</code> section listing their addresses — the
+mechanism behind the Linux kernel's ftrace and uftrace's dynamic mode. A runtime can patch
+those sleds into hook calls and back, giving genuinely zero-cost-when-off, toggleable
+tracing. The strongest candidate for "trace a live production process for five seconds".
+Costs: code-size growth, patching machinery, and entry-only hooks — exit timing needs a
+return-address trampoline, which is the hard part.</p>
+
+<h3 id="m-sancov"><code>-fsanitize-coverage</code></h3>
+<p>compiler-rt coverage callbacks (<code>__sanitizer_cov_trace_pc_guard</code> per edge,
+with a per-guard toggle word in the guard variant), aimed at fuzzers. Leaner than function
+hooks and gives basic-block-transition granularity, but there is no caller address and no
+exit event, so timing must be reconstructed, and guard tables need the compiler-rt runtime.
+Clang has the full menu; GCC ≥ 12 has <code>trace-pc</code> and <code>trace-cmp</code> only.
+Worth an experiment as a low-overhead "which edges ran" backend, not a replacement for call
+timing.</p>
+
+<h3 id="m-xray">LLVM XRay</h3>
+<p>Clang-only, and the most production-grade design in this list: sleds at function
+entry/exit patched at runtime through a supported API (<code>__xray_patch()</code>),
+per-function selection at compile time, and a logging library writing binary
+flight-recorder traces with tooling (<code>llvm-xray</code>). The closest existing model for
+callsight's streaming design — its sled layout and FDR buffering are the reference. Not
+usable as a default, being Clang-only.</p>
+
+<h3 id="m-gcov">gcov / <code>-fprofile-arcs</code></h3>
+<p>Edge <em>counters</em> for coverage, not timing. It answers "did this line run, how
+often", not "how long did it take". A possible complement if a coverage view is ever added;
+out of scope for tracing.</p>
+
+<h3 id="m-plugin">GCC plugin API</h3>
+<p>Loadable modules running custom GIMPLE/RTL passes: arbitrary injection, maximum control.
+But plugins are locked to the exact GCC version, the C++ API is fragile, Clang has no
+equivalent, and distribution is a nightmare. A deliberate non-goal.</p>
+
+<h3 id="m-context">Not compile-time (context only)</h3>
+<ul>
+  <li><strong><code>perf</code> sampling</strong> — no build integration at all; finds hot
+    functions, not call sequences. Complementary, and always available.</li>
+  <li><strong>eBPF/uprobes, Intel PT</strong> — runtime tracing with no rebuild; heavy
+    machinery and root requirements. Out of scope.</li>
+  <li><strong>uftrace</strong> — a userspace tracer built on
+    <code>-pg</code>/<code>-finstrument-functions</code> plus its own libmcount runtime,
+    with a dynamic mode on <code>-fpatchable-function-entry</code>. The closest relative
+    project; callsight differs in zero-runtime-dependency adoption and the config-file
+    selection workflow.</li>
+</ul>
+
+<h2 id="layout">Repository layout</h2>
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th>Path</th><th>What lives there</th></tr></thead>
+  <tbody>
+    <tr><td class="nowrap"><code>src/callsight/flags.py</code></td><td>Config parsing, pattern matching, exclude-list generation, compiler detection</td></tr>
+    <tr><td class="nowrap"><code>src/callsight/callgraph.py</code></td><td>The heuristic static call graph behind <code>include-func</code></td></tr>
+    <tr><td class="nowrap"><code>src/callsight/analyze.py</code></td><td>Streaming trace reader, enter/exit matcher, report formats</td></tr>
+    <tr><td class="nowrap"><code>src/callsight/runtime/</code></td><td><code>trace.c</code>, <code>trace.h</code>, <code>trace_shm.h</code> — copied into adopted projects</td></tr>
+    <tr><td class="nowrap"><code>src/callsight/stream/</code></td><td><code>trace_stream.c</code> plus vendored single-file zstd</td></tr>
+    <tr><td class="nowrap"><code>src/callsight/share/</code>, <code>cmake/</code></td><td>The Make fragment and the CMake module</td></tr>
+    <tr><td class="nowrap"><code>src/callsight/ui/</code></td><td>The optional FastAPI web UI</td></tr>
+    <tr><td class="nowrap"><code>tests/matrixlab/</code></td><td>Multi-threaded C11 demo workload; the end-to-end fixture</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="next-links">
+  <a class="next-link" href="streaming.html"><strong>Streaming &rarr;</strong><span>The ring layout and wire protocol in detail.</span></a>
+  <a class="next-link" href="https://github.com/harshithsunku/callsight/blob/main/STATUS.md"><strong>Status &amp; roadmap &rarr;</strong><span>What is done, what is next, and the deliberate non-goals.</span></a>
+</div>
+
+</main>
+
+<aside class="toc">
+  <div class="toc-label">On this page</div>
+  <ul>
+    <li><a href="#overview">The four stages</a></li>
+    <li><a href="#selection">1 · Selection</a></li>
+    <li class="sub"><a href="#callgraph">Static call graph</a></li>
+    <li><a href="#runtime">2 · Hook runtime</a></li>
+    <li class="sub"><a href="#event">The event record</a></li>
+    <li><a href="#analyzer">3 · The analyzer</a></li>
+    <li><a href="#mechanisms">Compiler mechanisms</a></li>
+    <li class="sub"><a href="#m-instrument">-finstrument-functions</a></li>
+    <li class="sub"><a href="#m-patchable">-fpatchable-function-entry</a></li>
+    <li class="sub"><a href="#m-xray">LLVM XRay</a></li>
+    <li><a href="#layout">Repository layout</a></li>
+  </ul>
+</aside>
+</div>
+
+<footer>
+  <div class="foot-row">
+    <a href="./">Home</a>
+    <a href="getting-started.html">Getting started</a>
+    <a href="configuration.html">Configuration</a>
+    <a href="analysis.html">Analysis</a>
+    <a href="web-ui.html">Web UI</a>
+    <a href="streaming.html">Streaming</a>
+    <a href="reference.html">Reference</a>
+    <a href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener">GitHub</a>
+  </div>
+  <div>MIT licensed · built for people who profile C and C++ on Linux</div>
+</footer>
+
+<script src="assets/docs.js"></script>
+</body>
+</html>

@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Remote streaming — callsight</title>
+<meta name="description" content="Trace an embedded or remote Linux target with no disk to spare: the runtime flushes into a shared-memory ring, a tiny C client ships it ZSTD-compressed over TCP, and callsight serve writes standard trace files.">
+<meta property="og:title" content="Remote streaming — callsight">
+<meta property="og:description" content="Nothing is written on the device. A shared-memory ring, a static C client, zstd over raw TCP — and a workload that never stalls.">
+<meta name="theme-color" content="#0d1016">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav-inner">
+    <a class="brand" href="./">
+      <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="10.5" cy="10.5" r="6.5" stroke="#22d3ee" stroke-width="2"/>
+        <path d="M15.6 15.6 L21 21" stroke="#818cf8" stroke-width="2.4" stroke-linecap="round"/>
+        <path d="M7.5 11.5 l2 2.4 3.5-5.4" stroke="#22d3ee" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg><span>call<span class="a">sight</span></span></a>
+    <div class="topnav-links">
+      <a href="getting-started.html">Getting started</a>
+      <a href="configuration.html">Configuration</a>
+      <a href="analysis.html">Analysis</a>
+      <a href="web-ui.html">Web UI</a>
+      <a href="streaming.html" class="active">Streaming</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="reference.html">Reference</a>
+    </div>
+    <div class="topnav-right">
+      <a class="btn btn-ghost" href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener">GitHub</a>
+      <button class="theme-btn" id="theme-toggle" aria-label="Toggle theme" title="Toggle light/dark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="4"></circle>
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+        </svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<header class="page-head">
+  <div class="container">
+    <span class="eyebrow">Devices</span>
+    <h1>Remote streaming</h1>
+    <p>On a constrained target you cannot accumulate trace files. Streaming mode keeps
+    <strong>nothing</strong> on the device: events go through a shared-memory ring and
+    leave over TCP, compressed.</p>
+  </div>
+</header>
+
+<div class="layout-with-toc">
+<main class="prose">
+
+<h2 id="when">When to stream</h2>
+<ul>
+  <li><strong>Remote or embedded targets</strong> — the interesting workload runs on a
+    device you reach over the network, not on your workstation.</li>
+  <li><strong>No disk, or no spare disk</strong> — nothing is written to the device's
+    filesystem; events live in RAM until they leave over TCP.</li>
+  <li><strong>Long-running workloads</strong> — file mode grows unboundedly. Streaming
+    bounds device-side memory to one fixed-size ring, however long the program runs.</li>
+</ul>
+
+<h2 id="how">How it works</h2>
+<div class="diagram">
+  <svg class="dg" viewBox="0 0 940 250" role="img" aria-label="Streaming path: traced process to shared-memory ring, drained by the trace_stream client, ZSTD over TCP to callsight serve on the analysis host">
+    <defs>
+      <marker id="s-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="dg-arrow accent"/>
+      </marker>
+      <marker id="s-arp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="dg-arrow"/>
+      </marker>
+    </defs>
+
+    <rect x="14" y="44" width="560" height="150" rx="12" class="dg-zone"/>
+    <text x="294" y="30" class="dg-phase">DEVICE · NOTHING TOUCHES DISK</text>
+    <text x="770" y="30" class="dg-phase">ANALYSIS HOST</text>
+    <rect x="600" y="44" width="326" height="150" rx="12" class="dg-zone"/>
+
+    <rect x="36" y="86" width="150" height="62" rx="9" class="dg-box"/>
+    <text x="111" y="110" class="dg-label">traced process</text>
+    <text x="111" y="127" class="dg-mono">TRACE_SHM=/name</text>
+    <text x="111" y="142" class="dg-sub">trace.c hooks</text>
+
+    <rect x="230" y="86" width="150" height="62" rx="9" class="dg-box accent"/>
+    <text x="305" y="110" class="dg-label">shm ring</text>
+    <text x="305" y="127" class="dg-sub">fixed size, spinlocked</text>
+    <text x="305" y="142" class="dg-sub">full → drop + count</text>
+
+    <rect x="424" y="86" width="132" height="62" rx="9" class="dg-box"/>
+    <text x="490" y="110" class="dg-label">trace_stream</text>
+    <text x="490" y="127" class="dg-sub">static C client</text>
+    <text x="490" y="142" class="dg-sub">zstd compress</text>
+
+    <rect x="622" y="86" width="150" height="62" rx="9" class="dg-box"/>
+    <text x="697" y="110" class="dg-label">callsight serve</text>
+    <text x="697" y="127" class="dg-mono">trace.stream.*.bin</text>
+    <text x="697" y="142" class="dg-sub">one file per device</text>
+
+    <rect x="800" y="86" width="112" height="62" rx="9" class="dg-box good"/>
+    <text x="856" y="112" class="dg-label">analyze</text>
+    <text x="856" y="132" class="dg-sub">web UI</text>
+
+    <line x1="186" y1="117" x2="226" y2="117" class="dg-line accent" marker-end="url(#s-ar)"/>
+    <line x1="380" y1="117" x2="420" y2="117" class="dg-line accent" marker-end="url(#s-ar)"/>
+    <line x1="556" y1="117" x2="618" y2="117" class="dg-line accent" marker-end="url(#s-ar)"/>
+    <line x1="772" y1="117" x2="796" y2="117" class="dg-line" marker-end="url(#s-arp)"/>
+    <text x="587" y="106" class="dg-sub">TCP</text>
+
+    <text x="294" y="216" class="dg-sub">no disk I/O · no network I/O in the traced process — only a shared-memory memcpy</text>
+  </svg>
+</div>
+
+<ol>
+  <li><strong>Traced process.</strong> With <code>TRACE_SHM=/name</code> set, the hooks
+    flush per-thread event batches into a POSIX shared-memory ring instead of files. A
+    flush is a locked <code>memcpy</code> of a buffered batch — short critical sections,
+    serialized by a spinlock, never held across I/O, because there is no I/O.</li>
+  <li><strong>On-device client.</strong> <code>trace_stream</code> maps the same ring,
+    drains it in batches, ZSTD-compresses each batch, and sends it over a raw TCP
+    connection. It exits once the traced process detaches and the ring is drained.</li>
+  <li><strong>Analysis host.</strong> <code>callsight serve</code> decompresses each chunk
+    and appends it to a standard <code>trace.stream.&lt;id&gt;.bin</code> file — one per
+    connection. Events from all threads arrive interleaved in one stream and are
+    demultiplexed by the analyzer, since every event carries its tid.</li>
+</ol>
+
+<h2 id="never-stall">The never-stall guarantee</h2>
+<p>Profiling must never slow down the thing it measures.</p>
+<ul>
+  <li><strong>No disk or network I/O in the traced process</strong> — only shared-memory
+    copies.</li>
+  <li><strong>Ring full → drop and count.</strong> If the ring fills faster than the client
+    drains it (slow network, small ring), the tracer drops events and increments a
+    <code>dropped</code> counter in the ring header. The client forwards the count as a
+    notice chunk and the server prints it, so data loss is always <em>visible</em>, never
+    silent.</li>
+  <li><strong>Size the ring to taste</strong> with <code>TRACE_SHM_SIZE</code> (bytes,
+    default 16&nbsp;MiB).</li>
+</ul>
+<div class="note good">
+  <strong>Verified end to end.</strong> 500,000 events across 26 threads over localhost
+  with <code>unmatched_exits=0</code>, and drop counting confirmed under deliberate ring
+  overflow — one of the repository's CI smoke jobs.
+</div>
+
+<h2 id="quickstart">Quick start</h2>
+<pre><code><span class="c"># analysis host (needs the stream extra):</span>
+<span class="p">$</span> uv tool install 'callsight[stream]'
+<span class="p">$</span> callsight serve                    <span class="c"># 0.0.0.0:9001, writes traces/</span></code></pre>
+<pre><code><span class="c"># adopt with streaming support — copies trace_stream.c + the vendored zstd:</span>
+<span class="p">$</span> callsight init --stream /path/to/project</code></pre>
+<pre><code><span class="c"># on the device:</span>
+<span class="p">$</span> cc -O2 -o callsight/trace_stream callsight/trace_stream.c callsight/zstd.c
+<span class="p">$</span> ./callsight/trace_stream /callsight0 &lt;server-ip&gt; 9001 &amp;
+<span class="p">$</span> TRACE_ENABLE=1 TRACE_SHM=/callsight0 ./yourapp.instr</code></pre>
+<p>Then analyze on the host exactly as with local traces:</p>
+<pre><code><span class="p">$</span> callsight analyze traces/ --exe ./yourapp.instr --top 20</code></pre>
+<div class="note">
+  <strong>Keep the binary.</strong> Symbols are resolved on the host from the same
+  instrumented binary you shipped to the device — <code>--exe</code> must point at it, and
+  <code>addr2line</code> must match its architecture.
+</div>
+
+<h2 id="protocol">Ring layout and wire protocol</h2>
+<p>Both live in <code>src/callsight/runtime/trace_shm.h</code>
+(<code>TRACE_SHM_VERSION</code> / <code>TRACE_STREAM_VERSION</code> are bumped on any
+layout change). All integers little-endian.</p>
+
+<h3 id="ring">Ring header</h3>
+<p><code>trace_shm_header_t</code>, followed by <code>capacity</code> bytes of event
+storage. The header is 64 bytes.</p>
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th>Field</th><th>Type</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>magic</code></td><td><code>char[8]</code></td><td><code>TKSHM</code></td></tr>
+    <tr><td><code>version</code></td><td><code>u32</code></td><td><code>TRACE_SHM_VERSION</code> (1)</td></tr>
+    <tr><td><code>capacity</code></td><td><code>u32</code></td><td>Ring bytes after the header</td></tr>
+    <tr><td><code>writers</code></td><td><code>u32</code></td><td>Tracer processes attached</td></tr>
+    <tr><td><code>lock</code></td><td><code>u32</code></td><td>Spinlock: 0 = free</td></tr>
+    <tr><td><code>head</code></td><td><code>u64</code></td><td>Monotonic write offset (bytes)</td></tr>
+    <tr><td><code>tail</code></td><td><code>u64</code></td><td>Monotonic read offset (bytes)</td></tr>
+    <tr><td><code>dropped</code></td><td><code>u64</code></td><td>Events dropped because the ring was full</td></tr>
+    <tr><td><code>_pad</code></td><td><code>u8[16]</code></td><td>Reserved</td></tr>
+  </tbody>
+</table>
+</div>
+<p><code>head</code> and <code>tail</code> are monotonic byte counters; bytes in use is
+<code>head - tail</code>.</p>
+
+<h3 id="wire">Wire protocol</h3>
+<p>Client → server over TCP: an 8-byte <code>TKSTREAM</code> magic, <code>u32 version</code>
+and <code>u32 event_size</code>, then a sequence of chunks. Each chunk is
+<code>u32 type, u32 raw_len, u32 zstd_len</code> followed by <code>zstd_len</code> bytes of
+ZSTD-compressed payload.</p>
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th>Type</th><th>Payload</th><th>Server action</th></tr></thead>
+  <tbody>
+    <tr><td><code>0</code> — events</td><td>Decompresses to <code>raw_len</code> bytes of raw events</td><td>Appended to the output file as-is</td></tr>
+    <tr><td><code>1</code> — notice</td><td>Decompresses to a <code>u64</code> dropped-event count</td><td>Printed, so loss is visible</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="client">The on-device client</h2>
+<p><code>trace_stream.c</code> is self-contained C built against a vendored single-file
+zstd v1.5.7 (generated from the official repository's <code>build/single_file_libs</code>;
+BSD licensed — see <code>zstd.LICENSE</code>). One <code>cc</code> line, and it
+cross-compiles like any other C file:</p>
+<pre><code><span class="p">$</span> aarch64-linux-gnu-gcc -O2 -o trace_stream trace_stream.c zstd.c</code></pre>
+
+<div class="next-links">
+  <a class="next-link" href="architecture.html"><strong>Architecture &rarr;</strong><span>The runtime, the event record, and how the hot path stays lock-free.</span></a>
+  <a class="next-link" href="analysis.html"><strong>Analysis &rarr;</strong><span>Streamed traces analyze exactly like local ones.</span></a>
+</div>
+
+</main>
+
+<aside class="toc">
+  <div class="toc-label">On this page</div>
+  <ul>
+    <li><a href="#when">When to stream</a></li>
+    <li><a href="#how">How it works</a></li>
+    <li><a href="#never-stall">The never-stall guarantee</a></li>
+    <li><a href="#quickstart">Quick start</a></li>
+    <li><a href="#protocol">Ring &amp; wire protocol</a></li>
+    <li class="sub"><a href="#ring">Ring header</a></li>
+    <li class="sub"><a href="#wire">Wire protocol</a></li>
+    <li><a href="#client">The on-device client</a></li>
+  </ul>
+</aside>
+</div>
+
+<footer>
+  <div class="foot-row">
+    <a href="./">Home</a>
+    <a href="getting-started.html">Getting started</a>
+    <a href="configuration.html">Configuration</a>
+    <a href="analysis.html">Analysis</a>
+    <a href="web-ui.html">Web UI</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="reference.html">Reference</a>
+    <a href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener">GitHub</a>
+  </div>
+  <div>MIT licensed · built for people who profile C and C++ on Linux</div>
+</footer>
+
+<script src="assets/docs.js"></script>
+</body>
+</html>

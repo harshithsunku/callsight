@@ -3,9 +3,11 @@
 ## What this repo is
 
 **callsight** — an open-source compile-time function-tracing toolkit for
-C/C++ projects (GCC/Clang, Make/CMake). Adopted into a target project via
+C/C++ projects (Make/CMake, Linux). Adopted into a target project via
 the `callsight` CLI (`uv` package); adds entry/exit hooks at compile time
-with zero source edits, controlled by a single `trace.config`.
+with zero source edits, controlled by a single `trace.config`. Selective
+coverage requires GCC: `-finstrument-functions-exclude-file-list` /
+`-exclude-function-list` do not exist in Clang (LLVM issue #15627).
 
 Layout:
 
@@ -42,13 +44,25 @@ Layout:
 - `tests/test_config_generate.py` — unit tests for `flags.render_config`.
 - `tests/test_callgraph.py` — unit tests for `callgraph.py` + include-func selection.
 - `tests/test_provision.py` — unit tests for `provision.py` (mocked downloads).
-- `docs/instrumentation-options.md` — compiler-mechanism survey.
+- `tests/test_analyze.py` — unit tests for `analyze.py`: file parsing,
+  enter/exit matching, `resolve()` (mocked addr2line), report formats.
+- `tests/test_compiler.py` — unit tests for compiler detection and the
+  GCC-only exclude-flag guard.
+- `tests/test_ui_report.py` — unit tests for the UI report endpoint
+  (row ordering/truncation); skipped unless the `ui` extra is installed.
+- `docs/` — the published documentation site: hand-built static HTML (no
+  generator), one file per page plus `assets/styles.css`, `assets/docs.js`,
+  `assets/flamegraph.svg` and `screenshots/`. `docs/architecture.html`
+  carries the compiler-mechanism survey.
+- `.github/scripts/check_docs_links.py` — stdlib link/anchor checker; the
+  pages workflow runs it before publishing.
 
 ## Build / test commands
 
 ```sh
-# unit tests (pure stdlib):
+# unit tests (pure stdlib); CI runs both ends of requires-python:
 python3 -m unittest discover -s tests
+uv run --python 3.9 python -m unittest discover -s tests
 
 # CLI without installing:
 uv run callsight --help
@@ -56,9 +70,9 @@ uv run callsight --help
 uv run --extra ui callsight ui          # http://127.0.0.1:8321
 # installed:
 uv tool install . && callsight --help
-# docs site (GitHub Pages content):
-uv run --group docs mkdocs serve        # local preview
-uv run --group docs mkdocs build --strict   # must stay clean
+# docs site (GitHub Pages content) — plain static files, no build step:
+python3 -m http.server -d docs 8000            # local preview
+python3 .github/scripts/check_docs_links.py docs   # must stay clean
 
 # end-to-end smoke test (Make integration):
 cd tests/matrixlab
@@ -121,14 +135,35 @@ hotspots (cmake_demo must show only `fib` — `mix` is excluded).
   directives: `include`, `exclude`, `exclude-func`, `include-func`
   (call-subtree selection via `callgraph.py`; auto-excludes must keep the
   substring-collision guard).
+- The two `-finstrument-functions-exclude-*` flags are GCC-only. Both build
+  integrations pass `--compiler-cmd`, and `flags.check_compiler` refuses a
+  selective config under clang with an explanation — never emit those flags
+  for a detected clang, and never let a failed detection block a build
+  (unknown is treated as GCC).
+- `callgraph.expand` must stay FIFO: a depth-limited walk that pops
+  depth-first lets a long path claim a node past the limit and silently drop
+  the subtree a shorter path would have expanded.
+- `analyze.py` streams: events are matched as they are read and never
+  collected into a list. Anything added there must keep memory proportional
+  to functions/threads, not to the event count.
 - `CALLSIGHT_COMMAND` in CMake is a cache variable — pass it with `-D`
   (a plain `set()` before `include(CallSight)` gets shadowed by the cache
   definition under CMP0126).
 - Do not commit `.venv/`, `build*/`, `bin/`, `traces/`, or `site/`
   (see .gitignore).
-- Docs live in `docs/` (MkDocs Material, `mkdocs.yml`); `docs/status.md`
-  includes the root `STATUS.md` — keep the status in STATUS.md, not in the
-  docs page. CI deploys the site to GitHub Pages on docs changes.
+- Docs live in `docs/` as hand-built static HTML — no site generator, no
+  build step: the pages workflow checks links and uploads `docs/` as-is.
+  Each page carries its own nav/footer (copy an existing page as the
+  template), pulls the shared `assets/styles.css` + `assets/docs.js`, and
+  must set the `active` class on its own nav link, a `<title>`, and a
+  meta description. Never hard-code colors in a page: use the CSS custom
+  properties, which carry both themes. Run
+  `python3 .github/scripts/check_docs_links.py docs` after editing — every
+  local link and `#anchor` must resolve.
+- Status lives in `STATUS.md` only; the site links to it rather than
+  duplicating it.
+- Docs screenshots and `assets/flamegraph.svg` are generated from real runs
+  of `tests/matrixlab`, not mocked. Regenerate them rather than editing.
 - Releases are tag-driven: pushing `v*` builds the static
   `callsight-ctags-linux-{x86_64,aarch64}` assets (universal-ctags p6.2.1,
   cross-compiled for aarch64, that leg is continue-on-error), runs smoke

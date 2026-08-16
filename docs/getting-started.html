@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Getting started — callsight</title>
+<meta name="description" content="Install callsight, adopt an existing C/C++ project without editing its sources, build the instrumented profile with Make or CMake, collect a trace, and read the hotspot report.">
+<meta property="og:title" content="Getting started — callsight">
+<meta property="og:description" content="From uv tool install to your first hotspot report, without editing a line of your project's source.">
+<meta name="theme-color" content="#0d1016">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav-inner">
+    <a class="brand" href="./">
+      <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="10.5" cy="10.5" r="6.5" stroke="#22d3ee" stroke-width="2"/>
+        <path d="M15.6 15.6 L21 21" stroke="#818cf8" stroke-width="2.4" stroke-linecap="round"/>
+        <path d="M7.5 11.5 l2 2.4 3.5-5.4" stroke="#22d3ee" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg><span>call<span class="a">sight</span></span></a>
+    <div class="topnav-links">
+      <a href="getting-started.html" class="active">Getting started</a>
+      <a href="configuration.html">Configuration</a>
+      <a href="analysis.html">Analysis</a>
+      <a href="web-ui.html">Web UI</a>
+      <a href="streaming.html">Streaming</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="reference.html">Reference</a>
+    </div>
+    <div class="topnav-right">
+      <a class="btn btn-ghost" href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener">GitHub</a>
+      <button class="theme-btn" id="theme-toggle" aria-label="Toggle theme" title="Toggle light/dark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="4"></circle>
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+        </svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<header class="page-head">
+  <div class="container">
+    <span class="eyebrow">Guide</span>
+    <h1>Getting started</h1>
+    <p>Install, adopt a project, collect a trace, read the report — without editing a
+    single line of the project's source.</p>
+  </div>
+</header>
+
+<div class="layout-with-toc">
+<main class="prose">
+
+<h2 id="requirements">Requirements</h2>
+<ul>
+  <li><strong>Linux.</strong> The hook runtime uses <code>SYS_gettid</code>,
+    <code>pthread_getname_np</code> and POSIX shared memory.</li>
+  <li><strong>GCC</strong> for selective instrumentation. Clang implements
+    <code>-finstrument-functions</code> but not the exclude lists
+    (<a href="https://github.com/llvm/llvm-project/issues/15627" target="_blank" rel="noopener">LLVM&nbsp;#15627</a>),
+    so under Clang only an "instrument everything" config builds. callsight detects the
+    compiler and says so before your build starts.</li>
+  <li><strong>binutils</strong> — <code>addr2line</code> resolves the recorded addresses,
+    including <code>static</code> functions.</li>
+  <li><strong>Python 3.9+</strong> and <a href="https://docs.astral.sh/uv/" target="_blank" rel="noopener">uv</a>.
+    The core is stdlib-only; the extras are optional.</li>
+</ul>
+
+<h2 id="install">Install</h2>
+<pre><code><span class="p">$</span> uv tool install callsight             <span class="c"># core CLI</span>
+<span class="p">$</span> uv tool install 'callsight[ui]'       <span class="c"># + the web UI</span>
+<span class="p">$</span> uv tool install 'callsight[stream]'   <span class="c"># + the remote streaming server</span></code></pre>
+<p>Both extras can be combined: <code>'callsight[ui,stream]'</code>. From a source
+checkout, <code>uv tool install .</code> does the same.</p>
+
+<h2 id="adopt">Adopt a project</h2>
+<p><code>callsight init</code> copies the hook runtime and the build wiring into a
+<code>callsight/</code> directory inside your project, writes a starter
+<code>trace.config</code> (an existing one is never overwritten), and prints the exact
+snippet to paste into your build file.</p>
+<pre><code><span class="p">$</span> cd /path/to/your/project
+<span class="p">$</span> callsight init .
+wrote /path/to/your/project/trace.config
+copied runtime + make integration into /path/to/your/project/callsight/ (35 sources found)</code></pre>
+<p>The build system is auto-detected — <code>CMakeLists.txt</code> means CMake, otherwise
+Make. Force it with <code>--build make</code> or <code>--build cmake</code>, and add
+<code>--stream</code> to also copy the on-device streaming client.</p>
+
+<h3 id="wire">Wire it into your build</h3>
+<div data-tabs>
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="make">GNU Make</button>
+    <button class="tab-btn" data-tab="cmake">CMake</button>
+  </div>
+  <div class="tab-panel active" data-tab="make">
+    <p>After your <code>SRCS</code>/<code>OBJS</code>/<code>CFLAGS_SYMBOLS</code> are
+    defined:</p>
+    <pre><code>CALLSIGHT_DIR ?= callsight
+include $(CALLSIGHT_DIR)/Makefile.callsight
+
+instrument: CFLAGS = $(CFLAGS_INSTRUMENT)
+instrument: $(BINDIR)/$(TARGET).instr
+$(BINDIR)/$(TARGET).instr: $(OBJS) $(TRACE_OBJ) | $(BINDIR)
+	$(CC) $(CFLAGS_INSTRUMENT) -no-pie -o $@ $(OBJS) $(TRACE_OBJ) $(LDFLAGS)</code></pre>
+    <p>The fragment expects <code>SRCS</code>, <code>BUILDDIR</code>,
+    <code>BINDIR</code>, <code>TARGET</code>, <code>CC</code>,
+    <code>CFLAGS_SYMBOLS</code> and <code>LDFLAGS</code>, and defines
+    <code>CFLAGS_INSTRUMENT</code> (your flags + hooks + exclude lists) and
+    <code>TRACE_OBJ</code> (the runtime object, compiled without instrumentation).</p>
+  </div>
+  <div class="tab-panel" data-tab="cmake">
+    <p>After the target is defined:</p>
+    <pre><code>list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/callsight")
+include(CallSight)
+callsight_instrument(&lt;your-target&gt;)</code></pre>
+    <p>Normal builds are completely untouched — instrumentation is opt-in per configure:</p>
+    <pre><code><span class="p">$</span> cmake -DCALLSIGHT_INSTRUMENT=ON -B build-instr
+<span class="p">$</span> cmake --build build-instr</code></pre>
+  </div>
+</div>
+<p>Full details for both, including every overridable variable, are on the
+<a href="reference.html#integrations">reference page</a>.</p>
+
+<div class="note">
+  <strong>Why -no-pie?</strong> It keeps runtime addresses equal to link addresses, so the
+  analyzer can hand them straight to <code>addr2line</code>. Both integrations add it for
+  you. If you link the instrumented binary yourself and skip it, <code>analyze</code> will
+  warn that nothing resolved.
+</div>
+
+<h2 id="build">Build the instrumented profile</h2>
+<pre><code><span class="p">$</span> make clean &amp;&amp; make instrument       <span class="c"># clean when switching profiles</span></code></pre>
+<p>The instrumented binary lives beside your normal one
+(<code>bin/yourapp.instr</code> by convention with the Make integration), so a normal
+<code>make</code> still produces an uninstrumented build with zero hooks in it.</p>
+
+<h2 id="collect">Collect a trace</h2>
+<p>The hooks are compiled in but <strong>inert</strong> until you ask for a trace, so an
+instrumented binary is safe to run normally.</p>
+<pre><code><span class="p">$</span> TRACE_ENABLE=1 TRACE_MAX=1000000 ./bin/yourapp.instr</code></pre>
+<ul>
+  <li><code>TRACE_ENABLE=1</code> turns collection on. Without it, every hook is one
+    predictable branch and returns.</li>
+  <li><code>TRACE_MAX</code> caps total events. <strong>Always set one for long
+    runs</strong> — a call-heavy program can produce millions of events per second.</li>
+  <li><code>TRACE_DIR</code> changes the output directory (default
+    <code>./traces</code>).</li>
+  <li><code>TRACE_THREADS="worker-*"</code> records only threads whose name matches — a
+    runtime filter, no rebuild needed.</li>
+</ul>
+<p>Each thread writes <code>traces/trace.&lt;pid&gt;.&lt;tid&gt;.bin</code>. A clean exit
+flushes everything; a killed process loses each thread's buffered tail.</p>
+
+<h2 id="analyze">Analyze</h2>
+<pre><code><span class="p">$</span> callsight analyze traces/ --exe ./bin/yourapp.instr --top 20</code></pre>
+<pre><code>events=<span class="n">1000000</span> threads=<span class="n">26</span> functions=<span class="n">139</span> span=48.7ms <span class="s">unmatched_exits=0</span> unclosed_enters=136
+
+== TOP BY SELF TIME ==
+     calls      incl_ms      self_ms       max_ms  function (first location)
+       272      529.382      529.382        9.983  timer_sleep_us (src/utils/timer.c:38)
+    127048       52.470       52.470        6.643  qs_swap (src/sort/quicksort.c:5)
+     57284      366.418       35.370        5.738  fft_recursive (src/signal/fft.c:63)</code></pre>
+<p><code>unmatched_exits=0</code> means every exit was matched to an enter — a clean
+trace. Read the columns, export a flame graph, and interpret the summary line on the
+<a href="analysis.html">analysis page</a>.</p>
+
+<h2 id="narrow">Narrow the selection</h2>
+<p>Your first wide run is a survey. Sort it by <code>calls</code>, find the chatty leaf
+helpers, and exclude them — they usually account for most of the volume and none of the
+insight.</p>
+<pre><code><span class="c"># trace.config</span>
+<span class="k">exclude</span> src/utils/rng.c        <span class="c"># RNG helpers: pure noise</span>
+<span class="k">exclude-func</span> crc32_update     <span class="c"># one hot function, by name</span></code></pre>
+<p>Then rebuild. Or go the other way and name a single entry point — callsight resolves
+its whole call subtree from the sources and instruments exactly that:</p>
+<pre><code><span class="p">$</span> callsight select src/ --function handle_request
+<span class="p">$</span> callsight scan . --config trace.config     <span class="c"># preview without building</span></code></pre>
+<p>The whole selection model is on the
+<a href="configuration.html">configuration page</a>.</p>
+
+<h2 id="try">Try it without a project</h2>
+<p>The repository ships <code>tests/matrixlab</code>, a multi-threaded C11 workload used
+as the end-to-end fixture — the traces in these docs come from it.</p>
+<pre><code><span class="p">$</span> git clone https://github.com/harshithsunku/callsight &amp;&amp; cd callsight/tests/matrixlab
+<span class="p">$</span> make clean &amp;&amp; make instrument
+<span class="p">$</span> TRACE_ENABLE=1 TRACE_MAX=1000000 timeout 5 ./bin/matrixlab.instr
+<span class="p">$</span> uv run callsight analyze traces/ --exe bin/matrixlab.instr --top 20</code></pre>
+
+<div class="next-links">
+  <a class="next-link" href="configuration.html"><strong>Configuration &rarr;</strong><span>Every directive, pattern rule, and the strategy for cutting event volume.</span></a>
+  <a class="next-link" href="analysis.html"><strong>Analysis &rarr;</strong><span>Read the report, export flame graphs and JSON, troubleshoot a bad trace.</span></a>
+  <a class="next-link" href="web-ui.html"><strong>Web UI &rarr;</strong><span>Drive the same workflow from a browser, and build the config by clicking.</span></a>
+  <a class="next-link" href="streaming.html"><strong>Remote streaming &rarr;</strong><span>Trace an embedded target that has no disk to spare.</span></a>
+</div>
+
+</main>
+
+<aside class="toc">
+  <div class="toc-label">On this page</div>
+  <ul>
+    <li><a href="#requirements">Requirements</a></li>
+    <li><a href="#install">Install</a></li>
+    <li><a href="#adopt">Adopt a project</a></li>
+    <li class="sub"><a href="#wire">Wire it into your build</a></li>
+    <li><a href="#build">Build</a></li>
+    <li><a href="#collect">Collect a trace</a></li>
+    <li><a href="#analyze">Analyze</a></li>
+    <li><a href="#narrow">Narrow the selection</a></li>
+    <li><a href="#try">Try it without a project</a></li>
+  </ul>
+</aside>
+</div>
+
+<footer>
+  <div class="foot-row">
+    <a href="./">Home</a>
+    <a href="configuration.html">Configuration</a>
+    <a href="analysis.html">Analysis</a>
+    <a href="web-ui.html">Web UI</a>
+    <a href="streaming.html">Streaming</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="reference.html">Reference</a>
+    <a href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener">GitHub</a>
+  </div>
+  <div>MIT licensed · built for people who profile C and C++ on Linux</div>
+</footer>
+
+<script src="assets/docs.js"></script>
+</body>
+</html>

@@ -8,11 +8,26 @@
 **Docs: https://harshithsunku.github.io/callsight/** ·
 [Status & roadmap](STATUS.md)
 
+[Getting started](https://harshithsunku.github.io/callsight/getting-started.html) ·
+[Configuration](https://harshithsunku.github.io/callsight/configuration.html) ·
+[Analysis](https://harshithsunku.github.io/callsight/analysis.html) ·
+[Web UI](https://harshithsunku.github.io/callsight/web-ui.html) ·
+[Streaming](https://harshithsunku.github.io/callsight/streaming.html) ·
+[Architecture](https://harshithsunku.github.io/callsight/architecture.html) ·
+[Reference](https://harshithsunku.github.io/callsight/reference.html)
+
 Add entry/exit timing hooks to **every function in a C/C++ project at
 compile time, with zero edits to its sources**, control exactly which files,
 folders, or functions get hooks from **one config file**, and turn the
-resulting traces into per-function hotspot reports. Works with GCC and
-Clang, C and C++, with GNU Make and CMake projects.
+resulting traces into per-function hotspot reports and flame graphs. C and
+C++, GNU Make and CMake, on Linux.
+
+**Compiler:** selective instrumentation needs **GCC** — the exclude flags it
+builds on are GCC-only ([LLVM issue
+#15627](https://github.com/llvm/llvm-project/issues/15627)). Clang can
+instrument *everything* (a config with no `include`/`exclude` directives);
+callsight detects the toolchain and tells you up front rather than letting
+the build fail one file at a time.
 
 ## Install
 
@@ -67,7 +82,23 @@ callsight analyze traces/ --exe ./yourapp --top 20
 
 The analyzer reports calls / inclusive / self / max time per function,
 resolving symbols — including `static` functions — with `addr2line`.
-`unmatched_exits=0` means a clean trace.
+`unmatched_exits=0` means a clean trace. Trace files are streamed, so a
+multi-million-event run costs a few MB of analyzer memory, not gigabytes.
+
+### Flame graphs and machine-readable output
+
+```sh
+callsight analyze traces/ --exe ./yourapp --format folded > out.folded
+flamegraph.pl out.folded > out.svg      # or drag out.folded into speedscope.app
+callsight analyze traces/ --exe ./yourapp --format json --top 0 | jq '.rows[0]'
+```
+
+`--format folded` prints one collapsed stack per call path
+(`main;handle_request;parse <self_ns>`), the input format understood by
+[flamegraph.pl](https://github.com/brendangregg/FlameGraph) and
+[speedscope](https://speedscope.app). `--format json` emits the whole report
+— summary counters, per-function rows, per-thread timing — for your own
+tooling (`--top 0` keeps every row).
 
 ## How it works
 
@@ -140,6 +171,23 @@ TRACE_ENABLE=1 TRACE_SHM=/callsight0 ./yourapp.instr
   zstd v1.5.7 (`src/callsight/stream/zstd.c`, generated from the official
   repo's `build/single_file_libs`; BSD license in `zstd.LICENSE`).
 
+## How it compares
+
+| tool | granularity | selection | needs |
+|---|---|---|---|
+| **callsight** | every function entry/exit, exact timing | **compile time, from one config file** — excluded code emits no hook at all | rebuild with GCC |
+| [uftrace](https://github.com/namhyung/uftrace) | same mechanism, richer live TUI/replay | mostly *runtime* filters (`-F`/`-N`), so filtered functions still pay the hook | rebuild (`-pg`/`-finstrument-functions`) |
+| `perf record` | sampled, statistical | none needed | no rebuild; often root/`perf_event_paranoid` |
+| gprof (`-pg`) | sampled + call counts | none | rebuild; single-threaded accounting |
+| Clang XRay | entry/exit with runtime patching | per-function attributes / lists | rebuild with Clang only |
+
+Reach for `perf` first when you want a cheap statistical profile of a whole
+system. Reach for callsight when you need **exact per-call timing for a
+chosen subsystem** — every call counted, nothing sampled — and you want the
+cost of the functions you did *not* choose to be exactly zero, because they
+were never given a hook. The selection lives in `trace.config` next to the
+code, and the same config drives the traced device and the analysis host.
+
 ## CLI reference
 
 | command | purpose |
@@ -148,7 +196,7 @@ TRACE_ENABLE=1 TRACE_SHM=/callsight0 ./yourapp.instr
 | `callsight scan <dir> [--config c]` | preview instrumentation selection |
 | `callsight select <dir> --function F [--depth N]` | show a function's call subtree; emit config lines |
 | `callsight flags --config c -- srcs...` | print compiler flags (build integrations use this) |
-| `callsight analyze [traces/] [--exe bin] [--top N]` | hotspot report |
+| `callsight analyze [traces/] [--exe bin] [--top N] [--format text\|json\|folded]` | hotspot report, JSON, or collapsed stacks |
 | `callsight ui [--host H] [--port P]` | web UI (needs `callsight[ui]`) |
 | `callsight provision [--force]` | download the bundled static ctags used by the UI config builder |
 | `callsight serve [--host H] [--port P] [--out dir]` | TCP server for remote streams (needs `callsight[stream]`) |
@@ -172,24 +220,35 @@ TRACE_ENABLE=1 TRACE_SHM=/callsight0 ./yourapp.instr
 - `tests/matrixlab/` — multi-threaded C11 demo workload; doubles as the
   end-to-end smoke test (`make instrument` → run → `callsight analyze`).
 - `tests/cmake_demo/` — tiny CMake fixture for the CMake integration.
-- `docs/instrumentation-options.md` — survey of GCC/Clang compile-time
+- `docs/` — the documentation site (hand-built static HTML, published to
+  GitHub Pages). `docs/architecture.html` carries the survey of GCC/Clang
   instrumentation mechanisms and how they map to callsight's roadmap.
 
 ## Known limitations
 
+- Selective instrumentation is GCC-only; Clang has `-finstrument-functions`
+  but not the exclude lists ([LLVM
+  #15627](https://github.com/llvm/llvm-project/issues/15627)). Under Clang,
+  only an unfiltered "instrument everything" config builds.
+- Linux only: the runtime uses `SYS_gettid`, `pthread_getname_np` and POSIX
+  shared memory.
 - Inlined functions emit no hooks (there is no call boundary).
 - Overhead ~30–60 ns per event; a profiling build, not a production one.
 - A crashed/killed process loses each thread's buffered tail; clean exits
   flush everything.
 - `exclude-file-list` matching by the compiler is substring-based; unusually
   overlapping directory names can over-match.
+- Analysis needs the recorded addresses to match link addresses, so link with
+  `-no-pie` (both build integrations do). `analyze` warns when most addresses
+  fail to resolve, which is what a PIE binary looks like.
 
 ## Roadmap
 
 - **Phase 2 — web UI**: done (`callsight ui`, optional `callsight[ui]` extra).
-  Next: richer report views (call graphs, flame graphs), live build-log
-  streaming.
+  Flame graphs: done via `analyze --format folded` (flamegraph.pl /
+  speedscope). Next: richer in-UI report views, live build-log streaming.
 - **Phase 3 — remote streaming**: done (`TRACE_SHM` ring → `trace_stream`
   client → ZSTD/TCP → `callsight serve`). Next: runtime on/off via
-  `-fpatchable-function-entry` (see docs/instrumentation-options.md), live
-  stream view in the web UI.
+  `-fpatchable-function-entry` (see the [compiler-mechanism
+  survey](https://harshithsunku.github.io/callsight/architecture.html#mechanisms)),
+  live stream view in the web UI.

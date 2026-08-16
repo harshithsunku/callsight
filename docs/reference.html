@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reference — callsight</title>
+<meta name="description" content="callsight reference: every CLI subcommand and flag, Make and CMake integration variables, runtime environment variables, trace file formats, and known limitations.">
+<meta property="og:title" content="Reference — callsight">
+<meta property="og:description" content="Every subcommand, every build-integration variable, every environment variable, and the known limitations.">
+<meta name="theme-color" content="#0d1016">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav-inner">
+    <a class="brand" href="./">
+      <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="10.5" cy="10.5" r="6.5" stroke="#22d3ee" stroke-width="2"/>
+        <path d="M15.6 15.6 L21 21" stroke="#818cf8" stroke-width="2.4" stroke-linecap="round"/>
+        <path d="M7.5 11.5 l2 2.4 3.5-5.4" stroke="#22d3ee" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg><span>call<span class="a">sight</span></span></a>
+    <div class="topnav-links">
+      <a href="getting-started.html">Getting started</a>
+      <a href="configuration.html">Configuration</a>
+      <a href="analysis.html">Analysis</a>
+      <a href="web-ui.html">Web UI</a>
+      <a href="streaming.html">Streaming</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="reference.html" class="active">Reference</a>
+    </div>
+    <div class="topnav-right">
+      <a class="btn btn-ghost" href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener">GitHub</a>
+      <button class="theme-btn" id="theme-toggle" aria-label="Toggle theme" title="Toggle light/dark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="4"></circle>
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+        </svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<header class="page-head">
+  <div class="container">
+    <span class="eyebrow">Reference</span>
+    <h1>Reference</h1>
+    <p>Every subcommand, every build-integration variable, every environment variable, and
+    the limitations worth knowing before you rely on a number.</p>
+  </div>
+</header>
+
+<div class="layout-with-toc">
+<main class="prose">
+
+<h2 id="cli">CLI</h2>
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th>Command</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td class="nowrap"><code>callsight init &lt;dir&gt;</code></td><td>Adopt callsight into a project: copy the runtime and build wiring, write a starter config, print the wiring snippet</td></tr>
+    <tr><td class="nowrap"><code>callsight scan &lt;dir&gt;</code></td><td>Preview which sources a config selects, without building</td></tr>
+    <tr><td class="nowrap"><code>callsight select &lt;dir&gt;</code></td><td>Explore a function's call subtree; emit the matching config lines</td></tr>
+    <tr><td class="nowrap"><code>callsight flags</code></td><td>Print the compiler flags (what the build integrations call)</td></tr>
+    <tr><td class="nowrap"><code>callsight analyze [traces/]</code></td><td>Hotspot report, JSON, or folded stacks</td></tr>
+    <tr><td class="nowrap"><code>callsight ui</code></td><td>Local web UI (needs the <code>ui</code> extra)</td></tr>
+    <tr><td class="nowrap"><code>callsight serve</code></td><td>TCP server for remote streams (needs the <code>stream</code> extra)</td></tr>
+    <tr><td class="nowrap"><code>callsight provision</code></td><td>Download the bundled static ctags used by the UI config builder</td></tr>
+    <tr><td class="nowrap"><code>callsight --version</code></td><td>Installed version</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3 id="cli-init">init</h3>
+<pre><code>callsight init &lt;dir&gt; [--build make|cmake] [--stream]</code></pre>
+<div class="table-scroll">
+<table class="ref">
+  <tbody>
+    <tr><td class="nowrap"><code>--build</code></td><td>Force the build system. Default: auto-detect (<code>CMakeLists.txt</code> → cmake, else make)</td></tr>
+    <tr><td class="nowrap"><code>--stream</code></td><td>Also copy the on-device streaming client (<code>trace_stream.c</code> + vendored zstd)</td></tr>
+  </tbody>
+</table>
+</div>
+<p>An existing <code>trace.config</code> is never overwritten.</p>
+
+<h3 id="cli-scan">scan</h3>
+<pre><code>callsight scan &lt;dir&gt; [--config trace.config]</code></pre>
+<p>Prints how many sources would be instrumented versus excluded, lists the excluded ones,
+and — for an <code>include-func</code> config — the subtree size and any
+substring-collision warnings.</p>
+
+<h3 id="cli-select">select</h3>
+<pre><code>callsight select &lt;dir&gt; --function NAME [--depth N] [--threads GLOB] [--list]</code></pre>
+<div class="table-scroll">
+<table class="ref">
+  <tbody>
+    <tr><td class="nowrap"><code>--function</code>, <code>-f</code></td><td>Seed function; repeatable</td></tr>
+    <tr><td class="nowrap"><code>--depth</code>, <code>-d</code></td><td>Limit subtree expansion (0 = just the seed, 1 = direct callees). Default: full subtree</td></tr>
+    <tr><td class="nowrap"><code>--threads</code>, <code>-t</code></td><td>Also print a <code>TRACE_THREADS</code> runtime hint</td></tr>
+    <tr><td class="nowrap"><code>--list</code>, <code>-l</code></td><td>List every function callsight can see, with the files defining it</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3 id="cli-flags">flags</h3>
+<pre><code>callsight flags --config CONFIG [--scan DIR] [--format make|raw]
+                [--compiler auto|gcc|clang] [--compiler-cmd CC] [--print] -- srcs...</code></pre>
+<div class="table-scroll">
+<table class="ref">
+  <tbody>
+    <tr><td class="nowrap"><code>--config</code></td><td>Config path (required)</td></tr>
+    <tr><td class="nowrap"><code>--scan DIR</code></td><td>Collect sources recursively under <code>DIR</code> instead of listing them</td></tr>
+    <tr><td class="nowrap"><code>--format</code></td><td><code>make</code> (default) prints a <code>CFLAGS_INSTRUMENT = …</code> assignment for <code>$(eval $(shell …))</code>; <code>raw</code> prints only the flags</td></tr>
+    <tr><td class="nowrap"><code>--compiler</code></td><td>Target toolchain. <code>auto</code> (default) detects it by running <code>--compiler-cmd</code></td></tr>
+    <tr><td class="nowrap"><code>--compiler-cmd</code></td><td>Compiler command used for detection. Default: <code>$CC</code>, else <code>cc</code></td></tr>
+    <tr><td class="nowrap"><code>--print</code></td><td>Human-readable selection summary on stderr</td></tr>
+  </tbody>
+</table>
+</div>
+<p>A selective config under a detected Clang exits with an explanation rather than emitting
+GCC-only flags. A failed detection is treated as GCC, so detection can never break a build
+that would otherwise work.</p>
+
+<h3 id="cli-analyze">analyze</h3>
+<pre><code>callsight analyze [tracedir] [--exe BIN] [--top N] [--format text|json|folded]</code></pre>
+<div class="table-scroll">
+<table class="ref">
+  <tbody>
+    <tr><td class="nowrap"><code>tracedir</code></td><td>Directory of <code>trace.*.bin</code> files. Default <code>traces</code></td></tr>
+    <tr><td class="nowrap"><code>--exe</code></td><td>Instrumented binary for <code>addr2line</code>. Default: the single <code>*.instr</code> under <code>./bin</code> or <code>.</code></td></tr>
+    <tr><td class="nowrap"><code>--top</code></td><td>Rows per table (default 20). With <code>--format json</code>, <code>0</code> means every row</td></tr>
+    <tr><td class="nowrap"><code>--format</code></td><td><code>text</code> tables (default), <code>json</code> for tooling, or <code>folded</code> collapsed stacks for flamegraph.pl and speedscope</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3 id="cli-serve">serve · ui · provision</h3>
+<pre><code>callsight serve [--host 0.0.0.0] [--port 9001] [--out traces]
+callsight ui    [--host 127.0.0.1] [--port 8321]
+callsight provision [--force]</code></pre>
+<p><code>provision</code> reports where ctags comes from and installs the bundled static
+copy into <code>$CALLSIGHT_HOME/bin</code> (default <code>~/.callsight/bin</code>),
+verifying its checksum. <code>--force</code> installs it even when a system ctags is
+present.</p>
+
+<h2 id="integrations">Build integrations</h2>
+<p>Both do the same three things: generate the flags from your config and source list,
+compile the runtime <strong>without</strong> instrumentation so hooks cannot recurse, and
+link with <code>-no-pie</code>.</p>
+
+<h3 id="make">GNU Make</h3>
+<pre><code>CALLSIGHT_DIR ?= callsight
+include $(CALLSIGHT_DIR)/Makefile.callsight</code></pre>
+<p>Expects <code>SRCS</code>, <code>BUILDDIR</code>, <code>BINDIR</code>,
+<code>TARGET</code>, <code>CC</code>, <code>CFLAGS_SYMBOLS</code> and <code>LDFLAGS</code>.
+Defines:</p>
+<ul>
+  <li><code>CFLAGS_INSTRUMENT</code> — your <code>CFLAGS_SYMBOLS</code> plus hooks plus the
+    exclude lists</li>
+  <li><code>TRACE_OBJ</code> — the runtime object, built without instrumentation</li>
+</ul>
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th>Variable</th><th>Default</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td class="nowrap"><code>CALLSIGHT_DIR</code></td><td><code>callsight</code></td><td>Where <code>trace.c</code>/<code>trace.h</code> live</td></tr>
+    <tr><td class="nowrap"><code>CALLSIGHT_CONFIG</code></td><td><code>trace.config</code></td><td>Selection config</td></tr>
+    <tr><td class="nowrap"><code>CALLSIGHT</code></td><td><code>callsight</code></td><td>Command that prints the flags — point it at <code>python3 …/cli.py</code> to run from a source checkout</td></tr>
+  </tbody>
+</table>
+</div>
+<p>When <code>make instrument</code> is requested and no flags could be generated, the
+build stops with an explanation instead of silently producing an uninstrumented binary. A
+normal <code>make</code> still succeeds even if callsight isn't installed.</p>
+
+<h3 id="cmake">CMake</h3>
+<pre><code>list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/callsight")
+include(CallSight)
+callsight_instrument(&lt;target&gt;)</code></pre>
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th>Cache variable</th><th>Default</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td class="nowrap"><code>CALLSIGHT_INSTRUMENT</code></td><td><code>OFF</code></td><td>Apply hooks to <code>callsight_instrument()</code> targets</td></tr>
+    <tr><td class="nowrap"><code>CALLSIGHT_CONFIG</code></td><td><code>&lt;src&gt;/trace.config</code></td><td>Selection config</td></tr>
+    <tr><td class="nowrap"><code>CALLSIGHT_COMMAND</code></td><td><code>callsight</code></td><td>Flag generator; a <code>;</code>-list works, e.g. <code>-D"CALLSIGHT_COMMAND=python3;/path/cli.py"</code></td></tr>
+  </tbody>
+</table>
+</div>
+<div class="note warn">
+  <strong><code>CALLSIGHT_COMMAND</code> is a cache variable</strong> — pass it with
+  <code>-D</code>. A plain <code>set()</code> before <code>include(CallSight)</code> gets
+  shadowed by the cache definition under CMP0126.
+</div>
+
+<h2 id="env">Environment variables</h2>
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th>Variable</th><th>Default</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td class="nowrap"><code>TRACE_ENABLE</code></td><td>off</td><td><code>1</code> enables collection; hooks are inert otherwise</td></tr>
+    <tr><td class="nowrap"><code>TRACE_DIR</code></td><td><code>./traces</code></td><td>Output directory (file mode)</td></tr>
+    <tr><td class="nowrap"><code>TRACE_MAX</code></td><td><code>0</code> (unlimited)</td><td>Global event cap</td></tr>
+    <tr><td class="nowrap"><code>TRACE_THREADS</code></td><td>unset (all)</td><td>Comma-separated globs matched against thread names</td></tr>
+    <tr><td class="nowrap"><code>TRACE_SHM</code></td><td>unset</td><td>Streaming mode: POSIX shm ring name</td></tr>
+    <tr><td class="nowrap"><code>TRACE_SHM_SIZE</code></td><td>16 MiB</td><td>Ring capacity in bytes</td></tr>
+    <tr><td class="nowrap"><code>CC</code></td><td><code>cc</code></td><td>Read by <code>callsight flags</code> for compiler detection</td></tr>
+    <tr><td class="nowrap"><code>CALLSIGHT_HOME</code></td><td><code>~/.callsight</code></td><td>Where the bundled ctags is installed</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="formats">File formats</h2>
+<h3 id="fmt-trace">Trace files</h3>
+<p><code>trace.&lt;pid&gt;.&lt;tid&gt;.bin</code> (file mode) or
+<code>trace.stream.&lt;id&gt;.bin</code> (streamed). A 16-byte header —
+<code>MLTRACE</code> magic, <code>u32</code> version, <code>u32</code> event size —
+followed by fixed 32-byte little-endian event records. The
+<a href="architecture.html#event">architecture page</a> documents the record; a file with a
+bad magic, unknown version or mismatched event size is skipped with a warning, and a
+truncated final record is tolerated.</p>
+
+<h3 id="fmt-folded">Folded stacks</h3>
+<pre><code>main;handle_request;parse_headers 148230
+main;handle_request 92117</code></pre>
+<p>One line per distinct call path: semicolon-separated frames, then <strong>self time in
+nanoseconds</strong>. Read directly by flamegraph.pl and speedscope.</p>
+
+<h3 id="fmt-json">JSON report</h3>
+<p>Summary counters (<code>events</code>, <code>threads</code>, <code>functions</code>,
+<code>span_ms</code>, <code>unmatched_exits</code>, <code>unclosed_enters</code>), a
+<code>rows</code> array sorted by self time, a <code>per_thread</code> array, plus
+<code>tool</code> and <code>version</code>. See the
+<a href="analysis.html#json">analysis page</a> for a full example.</p>
+
+<h2 id="limitations">Known limitations</h2>
+<ul>
+  <li><strong>Selective instrumentation is GCC-only.</strong> Clang has
+    <code>-finstrument-functions</code> but not the exclude lists
+    (<a href="https://github.com/llvm/llvm-project/issues/15627" target="_blank" rel="noopener">LLVM&nbsp;#15627</a>);
+    under Clang only an unfiltered config builds.</li>
+  <li><strong>Linux only.</strong> The runtime uses <code>SYS_gettid</code>,
+    <code>pthread_getname_np</code> and POSIX shared memory.</li>
+  <li><strong>Inlined functions emit no hooks</strong> — there is no call boundary to hook.</li>
+  <li><strong>Overhead is ~30–60 ns per event.</strong> This is a profiling build, not a
+    production one.</li>
+  <li><strong>A crashed or killed process loses each thread's buffered tail.</strong> Clean
+    exits flush everything.</li>
+  <li><strong>The compiler's exclude matching is substring-based</strong>, so unusually
+    overlapping directory or symbol names can over-match. callsight guards the
+    auto-generated function excludes against this and warns, but hand-written
+    <code>exclude-func</code> entries are yours to keep specific.</li>
+  <li><strong>Analysis needs <code>-no-pie</code></strong> so recorded addresses match link
+    addresses. Both integrations do this; <code>analyze</code> warns when most addresses
+    fail to resolve.</li>
+  <li><strong>Static call-graph resolution</strong> does not follow function pointers,
+    macro-generated calls, or C++ dynamic dispatch.</li>
+</ul>
+
+<h2 id="links">Project links</h2>
+<div class="next-links">
+  <a class="next-link" href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener"><strong>Repository &rarr;</strong><span>Source, issues, and the end-to-end fixtures.</span></a>
+  <a class="next-link" href="https://pypi.org/project/callsight/" target="_blank" rel="noopener"><strong>PyPI &rarr;</strong><span>Released versions.</span></a>
+  <a class="next-link" href="https://github.com/harshithsunku/callsight/blob/main/STATUS.md" target="_blank" rel="noopener"><strong>Status &amp; roadmap &rarr;</strong><span>What is done, what is next, what is deliberately out of scope.</span></a>
+  <a class="next-link" href="https://github.com/harshithsunku/callsight/blob/main/AGENTS.md" target="_blank" rel="noopener"><strong>Contributing &rarr;</strong><span>Conventions, build commands, and smoke-test procedures.</span></a>
+</div>
+
+</main>
+
+<aside class="toc">
+  <div class="toc-label">On this page</div>
+  <ul>
+    <li><a href="#cli">CLI</a></li>
+    <li class="sub"><a href="#cli-init">init</a></li>
+    <li class="sub"><a href="#cli-scan">scan</a></li>
+    <li class="sub"><a href="#cli-select">select</a></li>
+    <li class="sub"><a href="#cli-flags">flags</a></li>
+    <li class="sub"><a href="#cli-analyze">analyze</a></li>
+    <li class="sub"><a href="#cli-serve">serve · ui · provision</a></li>
+    <li><a href="#integrations">Build integrations</a></li>
+    <li class="sub"><a href="#make">GNU Make</a></li>
+    <li class="sub"><a href="#cmake">CMake</a></li>
+    <li><a href="#env">Environment variables</a></li>
+    <li><a href="#formats">File formats</a></li>
+    <li><a href="#limitations">Known limitations</a></li>
+    <li><a href="#links">Project links</a></li>
+  </ul>
+</aside>
+</div>
+
+<footer>
+  <div class="foot-row">
+    <a href="./">Home</a>
+    <a href="getting-started.html">Getting started</a>
+    <a href="configuration.html">Configuration</a>
+    <a href="analysis.html">Analysis</a>
+    <a href="web-ui.html">Web UI</a>
+    <a href="streaming.html">Streaming</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener">GitHub</a>
+  </div>
+  <div>MIT licensed · built for people who profile C and C++ on Linux</div>
+</footer>
+
+<script src="assets/docs.js"></script>
+</body>
+</html>

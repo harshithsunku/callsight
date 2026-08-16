@@ -50,11 +50,18 @@ Notes:
     function would silently disable it).
   - Both compile-time excludes are FREE at runtime: no hook is emitted at
     all. Prefer them over any runtime filtering.
+  - Both exclude flags are GCC-only. Clang implements
+    -finstrument-functions but not the exclude lists (LLVM issue #15627),
+    and its driver rejects unknown arguments, so a selective config cannot
+    be compiled with Clang. The compiler is detected from --compiler-cmd /
+    $CC and a config that needs exclusions fails here, with an explanation,
+    instead of deep inside the build.
 """
 
 import argparse
 import fnmatch
 import os
+import subprocess
 import sys
 
 try:
@@ -204,6 +211,56 @@ def scan_sources(directory):
     return sources
 
 
+_compiler_cache = {}
+
+
+def detect_compiler(cmd):
+    """Return 'clang', 'gcc' or None for the compiler invoked as `cmd`.
+
+    None means "could not tell" (command missing, unreadable banner) — the
+    caller treats that as GCC, because guessing wrong must never break a
+    build that would otherwise work."""
+    if not cmd:
+        return None
+    if cmd in _compiler_cache:
+        return _compiler_cache[cmd]
+    kind = None
+    try:
+        proc = subprocess.run(cmd.split() + ["--version"], capture_output=True,
+                              text=True, timeout=30)
+        banner = (proc.stdout + proc.stderr).lower()
+        if proc.returncode == 0:
+            if "clang" in banner:
+                kind = "clang"
+            elif "gcc" in banner or "free software foundation" in banner:
+                kind = "gcc"
+    except (OSError, subprocess.SubprocessError):
+        kind = None
+    _compiler_cache[cmd] = kind
+    return kind
+
+
+def check_compiler(compiler, file_excludes, funcs):
+    """Fail early when the selection needs GCC-only exclude flags.
+
+    Clang has -finstrument-functions but no -finstrument-functions-exclude-*
+    (https://github.com/llvm/llvm-project/issues/15627), and rejects unknown
+    driver arguments, so it would fail with an opaque 'unknown argument'
+    once per translation unit."""
+    if compiler != "clang" or not (file_excludes or funcs):
+        return
+    sys.exit(
+        f"this trace.config needs selective exclusion "
+        f"({len(file_excludes)} file pattern(s), {len(funcs)} function "
+        f"name(s)), which requires GCC.\n"
+        f"clang implements -finstrument-functions but not "
+        f"-finstrument-functions-exclude-file-list/-exclude-function-list "
+        f"(LLVM issue #15627).\n"
+        f"Options: build with GCC (e.g. make CC=gcc, or cmake "
+        f"-DCMAKE_C_COMPILER=gcc), or remove the include/exclude directives "
+        f"to instrument every function (that alone works on clang).")
+
+
 def format_flags(file_excludes, funcs):
     """Assemble the compiler flag string from final exclude lists."""
     # De-duplicate while keeping order.
@@ -219,13 +276,20 @@ def format_flags(file_excludes, funcs):
     return flags
 
 
+def exclude_lists(excludes, funcs, dropped):
+    """Final (file_excludes, func_excludes) for a set of dropped sources.
+
+    Header excludes must be passed through verbatim: they don't match any
+    source path, but the compiler matches them against definition files.
+    main() needs the two lists separately (check_compiler inspects them), so
+    this is the one place that assembles them."""
+    return list(excludes) + list(dropped), list(funcs)
+
+
 def instrument_flags(includes, excludes, funcs, sources):
     """Return the flag string: -finstrument-functions plus exclude lists."""
     _selected, dropped = select(sources, includes, excludes)
-
-    # Header excludes must be passed through verbatim: they don't match any
-    # source path, but the compiler matches them against definition files.
-    return format_flags([p for p in excludes] + dropped, funcs)
+    return format_flags(*exclude_lists(excludes, funcs, dropped))
 
 
 def function_selection(include_funcs, sources, includes, excludes):
@@ -308,6 +372,13 @@ def main(argv=None):
                          "$(eval $(shell ...)), 'raw' prints only the flags")
     ap.add_argument("--print", action="store_true",
                     help="human-readable selection summary on stderr")
+    ap.add_argument("--compiler", choices=("auto", "gcc", "clang"),
+                    default="auto",
+                    help="target toolchain; 'auto' detects it by running "
+                         "--compiler-cmd (selective exclusion needs GCC)")
+    ap.add_argument("--compiler-cmd", default=None, metavar="CC",
+                    help="compiler command used for detection "
+                         "(default: $CC, else cc)")
     ap.add_argument("sources", nargs="*", help="source files (after --)")
     args = ap.parse_args(argv)
 
@@ -323,11 +394,18 @@ def main(argv=None):
     if include_funcs:
         selected, dropped, auto_funcs, reachable, warnings = \
             function_selection(include_funcs, sources, includes, excludes)
-        flags = format_flags(list(excludes) + dropped,
-                             list(funcs) + auto_funcs)
+        file_excludes, func_excludes = exclude_lists(
+            excludes, list(funcs) + auto_funcs, dropped)
     else:
         selected, dropped = select(sources, includes, excludes)
-        flags = instrument_flags(includes, excludes, funcs, sources)
+        file_excludes, func_excludes = exclude_lists(excludes, funcs, dropped)
+
+    compiler = args.compiler
+    if compiler == "auto":
+        compiler = detect_compiler(args.compiler_cmd or os.environ.get("CC")
+                                   or "cc")
+    check_compiler(compiler, file_excludes, func_excludes)
+    flags = format_flags(file_excludes, func_excludes)
 
     if args.format == "make":
         print(f"CFLAGS_INSTRUMENT = $(CFLAGS_SYMBOLS) {flags}")

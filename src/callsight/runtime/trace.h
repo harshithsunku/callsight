@@ -6,9 +6,9 @@
  *
  * Drop-in design: this file is self-contained and has no project
  * dependencies. The host project compiles its sources with
- * -finstrument-functions (see gen_flags.py for selective coverage), which
- * makes GCC/Clang emit calls to the two __cyg_profile_* hooks below at
- * every function entry/exit. The runtime itself is compiled WITHOUT the
+ * -finstrument-functions (see `callsight flags` for selective coverage),
+ * which makes GCC/Clang emit calls to the two __cyg_profile_* hooks below
+ * at every function entry/exit. The runtime itself is compiled WITHOUT the
  * flag, so the hooks cannot recurse.
  *
  * Collection is inert unless enabled at runtime:
@@ -24,8 +24,8 @@
  *                      default: all threads
  *
  * Output: one binary file per thread, <dir>/trace.<pid>.<tid>.bin, resolved
- * offline with trace_analyze.py. In streaming mode the server side writes
- * equivalent trace.stream.*.bin files.
+ * offline with `callsight analyze`. In streaming mode the server side
+ * writes equivalent trace.stream.*.bin files.
  */
 
 #include <stdint.h>
