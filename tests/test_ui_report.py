@@ -73,11 +73,55 @@ class TestAnalyzeEndpoint(unittest.TestCase):
         self.assertEqual(data["unmatched_exits"], 0)
         self.assertEqual(data["unclosed_enters"], 0)
 
+    def test_rows_carry_latency_percentiles(self):
+        row = self.report(top=1)["rows"][0]
+        for field in ("p50_ns", "p99_ns", "max_ns"):
+            self.assertIn(field, row)
+
     def test_binary_outside_project_is_rejected(self):
         from fastapi import HTTPException
         with self.assertRaises(HTTPException) as cm:
             ui_app.analyze_traces(path=str(self.project),
                                   binary="../escape", top=10)
+        self.assertEqual(cm.exception.status_code, 404)
+
+
+@unittest.skipIf(ui_app is None, "needs the optional 'ui' extra (FastAPI)")
+class TestFlameEndpoint(unittest.TestCase):
+    """Collapsed stacks for the browser flame graph."""
+
+    EVENTS = [enter(1, 0xA, 0), enter(1, 0xB, 100),
+              leave(1, 0xB, 300), leave(1, 0xA, 400)]
+    NAMES = {0xA: ("outer", "/a.c:1"), 0xB: ("inner", "/b.c:1")}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.project = Path(self.tmp.name)
+        (self.project / "traces").mkdir()
+        (self.project / "traces" / "trace.1.1.0.bin").write_bytes(
+            pack_events(self.EVENTS))
+        self.binary = self.project / "app.instr"
+        self.binary.write_bytes(b"\x7fELF")
+        patch = mock.patch.object(analyze, "resolve", return_value=self.NAMES)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_returns_call_paths(self):
+        d = ui_app.flame(path=str(self.project), binary="app.instr", top=100)
+        self.assertEqual(d["paths"], 2)
+        self.assertEqual(dict(d["folded"]), {"outer": 200, "outer;inner": 200})
+
+    def test_caps_the_number_of_paths(self):
+        """A deep trace has more call paths than a screen has pixels."""
+        d = ui_app.flame(path=str(self.project), binary="app.instr", top=1)
+        self.assertEqual(len(d["folded"]), 1)
+        self.assertEqual(d["paths"], 2)
+
+    def test_binary_outside_project_is_rejected(self):
+        from fastapi import HTTPException
+        with self.assertRaises(HTTPException) as cm:
+            ui_app.flame(path=str(self.project), binary="../escape", top=10)
         self.assertEqual(cm.exception.status_code, 404)
 
 

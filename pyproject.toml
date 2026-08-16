@@ -1,6 +1,6 @@
 [project]
 name = "callsight"
-version = "0.3.1"
+version = "0.4.0"
 description = "Exact per-call timing for the C/C++ code you choose. Compile-time entry/exit tracing driven by one config file, with zero source edits — excluded code emits no hook at all."
 readme = "README.md"
 requires-python = ">=3.9"

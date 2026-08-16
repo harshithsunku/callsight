@@ -301,3 +301,23 @@ def analyze_traces(path: str, binary: str, top: int = Query(50, ge=0)):
     if top:
         data["rows"] = data["rows"][:top]
     return data
+
+
+@app.get("/api/flame")
+def flame(path: str, binary: str, top: int = Query(4000, ge=1)):
+    """Collapsed stacks for the flame graph.
+
+    Capped: a deep trace can have hundreds of thousands of distinct call
+    paths, and anything past the widest few thousand is narrower than a
+    pixel on any screen."""
+    p = project_path(path)
+    binary = (p / binary).resolve()
+    if not binary.is_file() or p not in binary.parents:
+        raise HTTPException(404, f"{binary}: not found under project")
+    try:
+        data = analyze.collect(p / "traces", str(binary), folded=True)
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+    return {"folded": data["folded"][:top],
+            "notices": data.get("notices", []),
+            "paths": len(data["folded"])}

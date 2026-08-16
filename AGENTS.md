@@ -48,8 +48,16 @@ Layout:
   enter/exit matching, `resolve()` (mocked addr2line), report formats.
 - `tests/test_compiler.py` — unit tests for compiler detection and the
   GCC-only exclude-flag guard.
-- `tests/test_ui_report.py` — unit tests for the UI report endpoint
-  (row ordering/truncation); skipped unless the `ui` extra is installed.
+- `tests/test_ui_report.py` — unit tests for the UI report and flame
+  endpoints; skipped unless the `ui` extra is installed.
+- `tests/runtime/` — end-to-end tests for the C runtime itself
+  (`runtime_probe.c` + `test_runtime.py`): segment integrity under thread-id
+  reuse, fork safety, budget/wrap/free-space/write-failure paths, clock
+  modes, summary mode, PIE symbolization, ground-truth accuracy. Needs a
+  compiler, so it lives in a subdirectory `unittest discover -s tests` does
+  not recurse into — run it explicitly.
+- `tests/bench/` — `bench.c` + `run_bench.py`: the published overhead
+  numbers. Any claim about ns/hook comes from here or it is not made.
 - `docs/` — the published documentation site: hand-built static HTML (no
   generator), one file per page plus `assets/styles.css`, `assets/docs.js`,
   `assets/flamegraph.svg` and `screenshots/`. `docs/architecture.html`
@@ -63,6 +71,22 @@ Layout:
 # unit tests (pure stdlib); CI runs both ends of requires-python:
 python3 -m unittest discover -s tests
 uv run --python 3.9 python -m unittest discover -s tests
+# the UI tests skip themselves without FastAPI:
+uv run --extra ui python -m unittest discover -s tests
+
+# the C runtime, end to end (needs a compiler; not picked up by discover):
+python3 tests/runtime/test_runtime.py
+# overhead numbers (rebuilds the workload twice, ~1 min):
+python3 tests/bench/run_bench.py
+
+# race-check the threaded paths:
+gcc -std=c11 -O1 -g -fsanitize=thread -I src/callsight/runtime \
+    -finstrument-functions -c -o /tmp/probe.o tests/runtime/runtime_probe.c
+gcc -std=c11 -O1 -g -fsanitize=thread -I src/callsight/runtime \
+    -c -o /tmp/rt.o src/callsight/runtime/trace.c
+gcc -fsanitize=thread -o /tmp/probe /tmp/probe.o /tmp/rt.o -lpthread
+TSAN_OPTIONS=halt_on_error=1:exitcode=1 TRACE_ENABLE=1 TRACE_DIR=/tmp/tt \
+    TRACE_SEG_MB=1 TRACE_MAX_MB=16 /tmp/probe threads 4 3000
 
 # CLI without installing:
 uv run callsight --help
@@ -77,8 +101,7 @@ python3 .github/scripts/check_docs_links.py docs   # must stay clean
 # end-to-end smoke test (Make integration):
 cd tests/matrixlab
 make clean && make instrument          # clean REQUIRED when switching profiles
-TRACE_ENABLE=1 TRACE_MAX=1000000 timeout 5 ./bin/matrixlab.instr
-uv run callsight analyze traces/ --top 20
+uv run callsight run --timeout 5 --max-events 1000000 -- ./bin/matrixlab.instr
 
 # end-to-end smoke test (CMake integration, cmake via uvx — no system cmake):
 cd tests/cmake_demo
@@ -150,18 +173,43 @@ hotspots (cmake_demo must show only `fib` — `mix` is excluded).
   the subtree a shorter path would have expanded.
 - `analyze.py` streams: events are matched as they are read and never
   collected into a list. Anything added there must keep memory proportional
-  to functions/threads, not to the event count.
+  to functions/threads, not to the event count. (`--format chrome` makes two
+  passes over the files rather than buffering a timeline, for this reason.)
+- Capture must stay bounded. `TRACE_MAX_MB` defaults to 512 and reaching any
+  limit is recorded as an in-band marker event — a capture that ends early
+  must never look like a capture that finished.
+- Process-wide counters are charged **per flush** (once per 8192 events),
+  never per event. A shared atomic on the hot path serializes every thread on
+  one cache line exactly when tracing is heaviest.
+- Trace files are opened `O_EXCL` and never appended to: the kernel recycles
+  thread ids, and appending would write a second file header into the middle
+  of an existing capture, shifting every later record off the 32-byte grid
+  with nothing in the file to reveal it.
+- The runtime is fork-aware (`pthread_atfork` child handler) and uses raw
+  descriptors rather than stdio — stdio's buffer would be duplicated into the
+  child. Every `write()` return value is checked.
+- Event kind 2 is a marker, not an exit. Any reader that treats an unknown
+  kind as an exit corrupts the whole match.
+- The trace header is version-gated by `header_size`: readers skip to it
+  rather than assuming a size, and version 1 files must keep analyzing.
+- The shm ring and the stream handshake carry the tracer's clock calibration
+  and load bias. Without them the server records raw cycle counts as
+  nanoseconds — a trace that looks fine and is wrong by the clock ratio.
 - `CALLSIGHT_COMMAND` in CMake is a cache variable — pass it with `-D`
   (a plain `set()` before `include(CallSight)` gets shadowed by the cache
   definition under CMP0126).
 - Do not commit `.venv/`, `build*/`, `bin/`, `traces/`, or `site/`
   (see .gitignore).
+- Published performance numbers come from `tests/bench/run_bench.py`. If a
+  number in the README or docs cannot be reproduced by running it, change the
+  number, not the claim.
 - Docs live in `docs/` as hand-built static HTML — no site generator, no
   build step: the pages workflow checks links and uploads `docs/` as-is.
   Each page carries its own nav/footer (copy an existing page as the
   template), pulls the shared `assets/styles.css` + `assets/docs.js`, and
   must set the `active` class on its own nav link, a `<title>`, and a
-  meta description. Never hard-code colors in a page: use the CSS custom
+  meta description. Adding a page means editing the nav and footer of every
+  other page — the checker catches broken links, not missing ones. Never hard-code colors in a page: use the CSS custom
   properties, which carry both themes. Run
   `python3 .github/scripts/check_docs_links.py docs` after editing — every
   local link and `#anchor` must resolve.

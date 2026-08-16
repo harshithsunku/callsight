@@ -27,6 +27,7 @@
     <div class="topnav-links">
       <a href="getting-started.html">Getting started</a>
       <a href="configuration.html">Configuration</a>
+      <a href="capture.html">Capture</a>
       <a href="analysis.html">Analysis</a>
       <a href="web-ui.html">Web UI</a>
       <a href="streaming.html">Streaming</a>
@@ -63,10 +64,13 @@
   <thead><tr><th>Command</th><th>Purpose</th></tr></thead>
   <tbody>
     <tr><td class="nowrap"><code>callsight init &lt;dir&gt;</code></td><td>Adopt callsight into a project: copy the runtime and build wiring, write a starter config, print the wiring snippet</td></tr>
+    <tr><td class="nowrap"><code>callsight run -- &lt;cmd&gt;</code></td><td>Run a binary with tracing on and report on it, in one step</td></tr>
     <tr><td class="nowrap"><code>callsight scan &lt;dir&gt;</code></td><td>Preview which sources a config selects, without building</td></tr>
     <tr><td class="nowrap"><code>callsight select &lt;dir&gt;</code></td><td>Explore a function's call subtree; emit the matching config lines</td></tr>
     <tr><td class="nowrap"><code>callsight flags</code></td><td>Print the compiler flags (what the build integrations call)</td></tr>
-    <tr><td class="nowrap"><code>callsight analyze [traces/]</code></td><td>Hotspot report, JSON, or folded stacks</td></tr>
+    <tr><td class="nowrap"><code>callsight analyze [traces/]</code></td><td>Hotspot report, JSON, folded stacks, a Perfetto timeline, or hot call sites</td></tr>
+    <tr><td class="nowrap"><code>callsight diff a.json b.json</code></td><td>Compare two JSON reports; fail a build on a regression</td></tr>
+    <tr><td class="nowrap"><code>callsight doctor</code></td><td>Check the toolchain, the config, the trace directory and free space</td></tr>
     <tr><td class="nowrap"><code>callsight ui</code></td><td>Local web UI (needs the <code>ui</code> extra)</td></tr>
     <tr><td class="nowrap"><code>callsight serve</code></td><td>TCP server for remote streams (needs the <code>stream</code> extra)</td></tr>
     <tr><td class="nowrap"><code>callsight provision</code></td><td>Download the bundled static ctags used by the UI config builder</td></tr>
@@ -86,6 +90,31 @@
 </table>
 </div>
 <p>An existing <code>trace.config</code> is never overwritten.</p>
+
+<h3 id="cli-run">run</h3>
+<pre><code>callsight run [options] -- &lt;command&gt; [args...]</code></pre>
+<p>Sets the environment, runs the command, then analyzes what it recorded. The four-step
+loop is identical every time and easy to get subtly wrong — most often by reporting on a
+<code>traces/</code> directory that still holds the previous run.</p>
+<div class="table-scroll">
+<table class="ref">
+  <tbody>
+    <tr><td class="nowrap"><code>--dir</code></td><td>Trace directory. Default <code>traces</code>; files from an earlier run are cleared first</td></tr>
+    <tr><td class="nowrap"><code>--keep</code></td><td>Keep those earlier files instead, and report on both runs together</td></tr>
+    <tr><td class="nowrap"><code>--timeout N</code></td><td>Stop the program after N seconds and report on what it recorded</td></tr>
+    <tr><td class="nowrap"><code>--mode</code></td><td><code>events</code> (default) or <code>summary</code></td></tr>
+    <tr><td class="nowrap"><code>--max-mb</code>, <code>--max-events</code>, <code>--full</code></td><td>Capture limits — see <a href="capture.html">capture limits</a></td></tr>
+    <tr><td class="nowrap"><code>--threads</code>, <code>--clock</code></td><td>Thread filter and timestamp source</td></tr>
+    <tr><td class="nowrap"><code>--exe</code></td><td>Binary to symbolize with. Default: the command itself</td></tr>
+    <tr><td class="nowrap"><code>--out FILE</code></td><td>Write the report to a file. The traced program shares stdout, so machine-readable output needs somewhere of its own</td></tr>
+    <tr><td class="nowrap"><code>--top</code>, <code>--format</code>, <code>--addr2line</code>, <code>--subtract-overhead</code></td><td>Passed through to <code>analyze</code></td></tr>
+  </tbody>
+</table>
+</div>
+<pre><code>callsight run --timeout 10 --top 20 -- ./bin/app.instr --workload heavy
+callsight run --mode summary --out report.json --format json -- ./bin/app.instr</code></pre>
+<p><code>--timeout</code> sends <code>SIGTERM</code> first so a clean exit can flush each
+thread's buffered tail; only a program that ignores it gets killed.</p>
 
 <h3 id="cli-scan">scan</h3>
 <pre><code>callsight scan &lt;dir&gt; [--config trace.config]</code></pre>
@@ -126,31 +155,65 @@ GCC-only flags. A failed detection is treated as GCC, so detection can never bre
 that would otherwise work.</p>
 
 <h3 id="cli-analyze">analyze</h3>
-<pre><code>callsight analyze [tracedir] [--exe BIN] [--top N] [--format text|json|folded]</code></pre>
+<pre><code>callsight analyze [tracedir] [--exe BIN] [--top N]
+                  [--format text|json|folded|chrome|callers]
+                  [--addr2line CMD] [--subtract-overhead]</code></pre>
 <div class="table-scroll">
 <table class="ref">
   <tbody>
     <tr><td class="nowrap"><code>tracedir</code></td><td>Directory of <code>trace.*.bin</code> files. Default <code>traces</code></td></tr>
     <tr><td class="nowrap"><code>--exe</code></td><td>Instrumented binary for <code>addr2line</code>. Default: the single <code>*.instr</code> under <code>./bin</code> or <code>.</code></td></tr>
     <tr><td class="nowrap"><code>--top</code></td><td>Rows per table (default 20). With <code>--format json</code>, <code>0</code> means every row</td></tr>
-    <tr><td class="nowrap"><code>--format</code></td><td><code>text</code> tables (default), <code>json</code> for tooling, or <code>folded</code> collapsed stacks for flamegraph.pl and speedscope</td></tr>
+    <tr><td class="nowrap"><code>--format</code></td><td><code>text</code> tables (default), <code>json</code> for tooling, <code>folded</code> collapsed stacks for flamegraph.pl and speedscope, <code>chrome</code> for ui.perfetto.dev, <code>callers</code> for hot call sites</td></tr>
+    <tr><td class="nowrap"><code>--addr2line</code></td><td>The <code>addr2line</code> to use. Default <code>$CALLSIGHT_ADDR2LINE</code>, else the host one. A cross-compiled binary needs its own toolchain's copy — host binutils cannot read a foreign ELF</td></tr>
+    <tr><td class="nowrap"><code>--subtract-overhead</code></td><td>Deduct the runtime's own measured per-hook cost from the reported times</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Summary traces (<code>TRACE_MODE=summary</code>) are detected automatically and merged.
+They hold per-function totals rather than call paths, so <code>folded</code>,
+<code>chrome</code> and <code>callers</code> are refused with an explanation instead of
+producing an empty result.</p>
+
+<h3 id="cli-diff">diff</h3>
+<pre><code>callsight diff BASE.json NEW.json [--key self_ms] [--threshold N] [--fail-over PCT]</code></pre>
+<p>Compares two <code>--format json</code> reports function by function. Exact call counts
+make this a real comparison rather than two samples that happened to land differently, so
+it works as a build gate:</p>
+<pre><code>callsight diff base.json new.json --fail-over 10   # exit 1 on a &gt;10% regression</code></pre>
+<div class="table-scroll">
+<table class="ref">
+  <tbody>
+    <tr><td class="nowrap"><code>--key</code></td><td>Metric to compare. Default <code>self_ms</code></td></tr>
+    <tr><td class="nowrap"><code>--threshold</code></td><td>Ignore changes smaller than this, in <code>--key</code> units</td></tr>
+    <tr><td class="nowrap"><code>--fail-over</code></td><td>Exit non-zero if any function regresses by more than this percentage</td></tr>
   </tbody>
 </table>
 </div>
 
+<h3 id="cli-doctor">doctor</h3>
+<pre><code>callsight doctor [project] [--config trace.config] [--dir traces]</code></pre>
+<p>Checks the compiler and whether it is GCC, <code>addr2line</code>, that
+<code>-finstrument-functions</code> is accepted, that the config selects something, and
+that the trace directory is writable with room to spare. Exits non-zero if anything is
+actually broken; observations that are not problems are marked <code>note</code>.</p>
+
 <h3 id="cli-serve">serve · ui · provision</h3>
 <pre><code>callsight serve [--host 0.0.0.0] [--port 9001] [--out traces]
+                [--max-mb 4096] [--seg-mb 256]
 callsight ui    [--host 127.0.0.1] [--port 8321]
 callsight provision [--force]</code></pre>
+<p><code>serve</code> bounds and rotates its output per connection: a device streaming for
+an hour should not fill the analysis host either.</p>
 <p><code>provision</code> reports where ctags comes from and installs the bundled static
 copy into <code>$CALLSIGHT_HOME/bin</code> (default <code>~/.callsight/bin</code>),
 verifying its checksum. <code>--force</code> installs it even when a system ctags is
 present.</p>
 
 <h2 id="integrations">Build integrations</h2>
-<p>Both do the same three things: generate the flags from your config and source list,
-compile the runtime <strong>without</strong> instrumentation so hooks cannot recurse, and
-link with <code>-no-pie</code>.</p>
+<p>Both do the same two things: generate the flags from your config and source list, and
+compile the runtime <strong>without</strong> instrumentation so hooks cannot recurse.
+Neither forces <code>-no-pie</code> any more — link the way you ship.</p>
 
 <h3 id="make">GNU Make</h3>
 <pre><code>CALLSIGHT_DIR ?= callsight
@@ -188,6 +251,7 @@ callsight_instrument(&lt;target&gt;)</code></pre>
     <tr><td class="nowrap"><code>CALLSIGHT_INSTRUMENT</code></td><td><code>OFF</code></td><td>Apply hooks to <code>callsight_instrument()</code> targets</td></tr>
     <tr><td class="nowrap"><code>CALLSIGHT_CONFIG</code></td><td><code>&lt;src&gt;/trace.config</code></td><td>Selection config</td></tr>
     <tr><td class="nowrap"><code>CALLSIGHT_COMMAND</code></td><td><code>callsight</code></td><td>Flag generator; a <code>;</code>-list works, e.g. <code>-D"CALLSIGHT_COMMAND=python3;/path/cli.py"</code></td></tr>
+    <tr><td class="nowrap"><code>CALLSIGHT_NO_PIE</code></td><td><code>OFF</code></td><td>Link instrumented targets with <code>-no-pie</code>. Not needed: the trace header carries the load bias</td></tr>
   </tbody>
 </table>
 </div>
@@ -203,12 +267,19 @@ callsight_instrument(&lt;target&gt;)</code></pre>
   <thead><tr><th>Variable</th><th>Default</th><th>Meaning</th></tr></thead>
   <tbody>
     <tr><td class="nowrap"><code>TRACE_ENABLE</code></td><td>off</td><td><code>1</code> enables collection; hooks are inert otherwise</td></tr>
-    <tr><td class="nowrap"><code>TRACE_DIR</code></td><td><code>./traces</code></td><td>Output directory (file mode)</td></tr>
-    <tr><td class="nowrap"><code>TRACE_MAX</code></td><td><code>0</code> (unlimited)</td><td>Global event cap</td></tr>
+    <tr><td class="nowrap"><code>TRACE_DIR</code></td><td><code>./traces</code></td><td>Output directory, resolved to an absolute path at startup so a later <code>chdir()</code> cannot scatter segments</td></tr>
+    <tr><td class="nowrap"><code>TRACE_MODE</code></td><td><code>events</code></td><td><code>summary</code> aggregates in-process and writes only totals — constant memory and constant output, whatever the run length</td></tr>
+    <tr><td class="nowrap"><code>TRACE_MAX_MB</code></td><td><code>512</code></td><td>On-disk budget for the process. <code>0</code> = unlimited</td></tr>
+    <tr><td class="nowrap"><code>TRACE_FULL</code></td><td><code>stop</code></td><td>At the budget: <code>stop</code> keeps the start, <code>wrap</code> keeps the end</td></tr>
+    <tr><td class="nowrap"><code>TRACE_SEG_MB</code></td><td><code>32</code></td><td>Segment size, i.e. rotation granularity</td></tr>
+    <tr><td class="nowrap"><code>TRACE_MIN_FREE_MB</code></td><td><code>64</code></td><td>Stop below this much free space. <code>0</code> disables the check</td></tr>
+    <tr><td class="nowrap"><code>TRACE_MAX</code></td><td><code>0</code> (unlimited)</td><td>Global event cap, as an upper bound</td></tr>
+    <tr><td class="nowrap"><code>TRACE_CLOCK</code></td><td><code>auto</code></td><td><code>auto</code> uses the invariant cycle counter where the hardware has one, else <code>CLOCK_MONOTONIC</code>; <code>mono</code>, <code>raw</code> and <code>tsc</code> force it</td></tr>
     <tr><td class="nowrap"><code>TRACE_THREADS</code></td><td>unset (all)</td><td>Comma-separated globs matched against thread names</td></tr>
     <tr><td class="nowrap"><code>TRACE_SHM</code></td><td>unset</td><td>Streaming mode: POSIX shm ring name</td></tr>
     <tr><td class="nowrap"><code>TRACE_SHM_SIZE</code></td><td>16 MiB</td><td>Ring capacity in bytes</td></tr>
     <tr><td class="nowrap"><code>CC</code></td><td><code>cc</code></td><td>Read by <code>callsight flags</code> for compiler detection</td></tr>
+    <tr><td class="nowrap"><code>CALLSIGHT_ADDR2LINE</code></td><td><code>addr2line</code></td><td>Symbolizer for <code>analyze</code>; set it to a cross-toolchain copy for foreign binaries</td></tr>
     <tr><td class="nowrap"><code>CALLSIGHT_HOME</code></td><td><code>~/.callsight</code></td><td>Where the bundled ctags is installed</td></tr>
   </tbody>
 </table>
@@ -216,13 +287,34 @@ callsight_instrument(&lt;target&gt;)</code></pre>
 
 <h2 id="formats">File formats</h2>
 <h3 id="fmt-trace">Trace files</h3>
-<p><code>trace.&lt;pid&gt;.&lt;tid&gt;.bin</code> (file mode) or
-<code>trace.stream.&lt;id&gt;.bin</code> (streamed). A 16-byte header —
-<code>MLTRACE</code> magic, <code>u32</code> version, <code>u32</code> event size —
-followed by fixed 32-byte little-endian event records. The
+<p><code>trace.&lt;pid&gt;.&lt;tid&gt;.&lt;seq&gt;.bin</code> (file mode) or
+<code>trace.stream.&lt;id&gt;.&lt;seq&gt;.bin</code> (streamed). An 80-byte version 2
+header followed by fixed 32-byte little-endian event records. The
 <a href="architecture.html#event">architecture page</a> documents the record; a file with a
 bad magic, unknown version or mismatched event size is skipped with a warning, and a
 truncated final record is tolerated.</p>
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td class="nowrap"><code>magic, version, event_size</code></td><td>The first 16 bytes are laid out exactly as version 1, so any reader can identify the file before it knows the rest</td></tr>
+    <tr><td class="nowrap"><code>header_size</code></td><td>Bytes to the first event. Readers skip to it rather than assuming a size, which is what lets a later version add fields without breaking this one</td></tr>
+    <tr><td class="nowrap"><code>flags</code></td><td>Bit 0: timestamps are raw ticks, not nanoseconds. Bit 1: this capture rotated</td></tr>
+    <tr><td class="nowrap"><code>load_bias</code></td><td>The PIE relocation offset; <code>analyze</code> subtracts it to get link addresses. Zero for a <code>-no-pie</code> link</td></tr>
+    <tr><td class="nowrap"><code>tick_hz, t0_ticks, t0_ns</code></td><td>Clock calibration. A closing anchor written at exit lets the rate be derived across the whole run</td></tr>
+    <tr><td class="nowrap"><code>hook_ns</code></td><td>The runtime's own measured per-hook cost, for <code>--subtract-overhead</code></td></tr>
+    <tr><td class="nowrap"><code>pid, seq</code></td><td>Owning process and segment number</td></tr>
+  </tbody>
+</table>
+</div>
+<p><strong>Version 1 files still analyze.</strong> They carry a bare 16-byte header,
+nanosecond timestamps, no load bias and no markers.</p>
+
+<h3 id="fmt-summary">Summary files</h3>
+<p><code>trace.summary.&lt;pid&gt;.&lt;tid&gt;.bin</code>: an <code>MLSUMRY</code> header
+followed by one 688-byte record per function — address, calls, inclusive and self time,
+min, max, and a 160-bucket duration histogram (four sub-buckets per octave). Merged across
+threads by <code>analyze</code>.</p>
 
 <h3 id="fmt-folded">Folded stacks</h3>
 <pre><code>main;handle_request;parse_headers 148230
@@ -246,17 +338,27 @@ nanoseconds</strong>. Read directly by flamegraph.pl and speedscope.</p>
   <li><strong>Linux only.</strong> The runtime uses <code>SYS_gettid</code>,
     <code>pthread_getname_np</code> and POSIX shared memory.</li>
   <li><strong>Inlined functions emit no hooks</strong> — there is no call boundary to hook.</li>
-  <li><strong>Overhead is ~30–60 ns per event.</strong> This is a profiling build, not a
-    production one.</li>
+  <li><strong>Overhead is roughly 12 ns per event</strong> with the cycle-counter clock and
+    16 ns with <code>clock_gettime</code>, measured by
+    <a href="https://github.com/harshithsunku/callsight/blob/main/tests/bench/run_bench.py" target="_blank" rel="noopener"><code>tests/bench/run_bench.py</code></a>.
+    An instrumented build with tracing <em>off</em> costs well under a nanosecond per hook.
+    This is still a profiling build, not a production one.</li>
   <li><strong>A crashed or killed process loses each thread's buffered tail.</strong> Clean
-    exits flush everything.</li>
+    exits flush everything; <code>callsight run --timeout</code> sends
+    <code>SIGTERM</code> first for that reason.</li>
+  <li><strong>Capture is bounded by default</strong> at 512 MB
+    (<a href="capture.html">capture limits</a>). Reaching a bound is reported in the trace,
+    not left for you to infer.</li>
+  <li><strong>Summary mode has no call paths.</strong> It records per-function totals, so
+    flame graphs, the timeline export and hot call sites need event mode.</li>
   <li><strong>The compiler's exclude matching is substring-based</strong>, so unusually
     overlapping directory or symbol names can over-match. callsight guards the
     auto-generated function excludes against this and warns, but hand-written
     <code>exclude-func</code> entries are yours to keep specific.</li>
-  <li><strong>Analysis needs <code>-no-pie</code></strong> so recorded addresses match link
-    addresses. Both integrations do this; <code>analyze</code> warns when most addresses
-    fail to resolve.</li>
+  <li><strong>Position-independent executables are supported.</strong> The runtime records
+    the load bias in every trace header, so <code>-no-pie</code> is no longer required —
+    which matters, because forcing it would have you profiling a binary built differently
+    from the one you ship. Version 1 traces predate this and still need it.</li>
   <li><strong>Static call-graph resolution</strong> does not follow function pointers,
     macro-generated calls, or C++ dynamic dispatch.</li>
 </ul>
@@ -276,10 +378,13 @@ nanoseconds</strong>. Read directly by flamegraph.pl and speedscope.</p>
   <ul>
     <li><a href="#cli">CLI</a></li>
     <li class="sub"><a href="#cli-init">init</a></li>
+    <li class="sub"><a href="#cli-run">run</a></li>
     <li class="sub"><a href="#cli-scan">scan</a></li>
     <li class="sub"><a href="#cli-select">select</a></li>
     <li class="sub"><a href="#cli-flags">flags</a></li>
     <li class="sub"><a href="#cli-analyze">analyze</a></li>
+    <li class="sub"><a href="#cli-diff">diff</a></li>
+    <li class="sub"><a href="#cli-doctor">doctor</a></li>
     <li class="sub"><a href="#cli-serve">serve · ui · provision</a></li>
     <li><a href="#integrations">Build integrations</a></li>
     <li class="sub"><a href="#make">GNU Make</a></li>
@@ -297,6 +402,7 @@ nanoseconds</strong>. Read directly by flamegraph.pl and speedscope.</p>
     <a href="./">Home</a>
     <a href="getting-started.html">Getting started</a>
     <a href="configuration.html">Configuration</a>
+    <a href="capture.html">Capture</a>
     <a href="analysis.html">Analysis</a>
     <a href="web-ui.html">Web UI</a>
     <a href="streaming.html">Streaming</a>

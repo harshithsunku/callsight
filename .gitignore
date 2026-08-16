@@ -5,3 +5,9 @@ dist/
 site/
 core
 core.*
+
+# Trace output. `callsight run` defaults to ./traces, so this is easy to
+# generate at the repo root while testing.
+traces/
+bin/
+build*/

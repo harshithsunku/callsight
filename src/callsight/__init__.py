@@ -5,6 +5,6 @@ try:  # the installed dist is the source of truth
     try:
         __version__ = _version("callsight")
     except PackageNotFoundError:  # running from a source checkout
-        __version__ = "0.3.1"
+        __version__ = "0.4.0"
 except ImportError:  # pragma: no cover - importlib.metadata is stdlib >= 3.8
-    __version__ = "0.3.1"
+    __version__ = "0.4.0"

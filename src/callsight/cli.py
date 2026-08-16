@@ -4,11 +4,14 @@ callsight — compile-time function tracing for C/C++ projects.
 
 Subcommands:
   init     adopt callsight into a project (copies runtime + build wiring)
+  run      run an instrumented binary with tracing on and report
   scan     show which sources a trace.config would instrument
   select   explore a function's call subtree; emit trace.config lines
   flags    print compiler flags (used by Make/CMake integrations)
   analyze  offline report from a traces/ directory: hotspot tables, JSON,
-           or folded stacks for flame graphs
+           folded stacks, a Perfetto timeline or hot call sites
+  diff     compare two JSON reports; fail a build on a regression
+  doctor   check the toolchain and environment
   ui       local web UI (needs callsight[ui])
   serve    TCP server for remote trace streams (needs callsight[stream])
   provision  download the bundled static ctags into $CALLSIGHT_HOME/bin
@@ -18,6 +21,7 @@ import argparse
 import os
 import shutil
 import sys
+from contextlib import redirect_stdout as _redirect_stdout
 from pathlib import Path
 
 try:
@@ -80,7 +84,7 @@ Add to your Makefile (after SRCS/OBJS/CFLAGS_SYMBOLS are defined):
     instrument: CFLAGS = $(CFLAGS_INSTRUMENT)
     instrument: $(BINDIR)/$(TARGET).instr
     $(BINDIR)/$(TARGET).instr: $(OBJS) $(TRACE_OBJ) | $(BINDIR)
-    \t$(CC) $(CFLAGS_INSTRUMENT) -no-pie -o $@ $(OBJS) $(TRACE_OBJ) $(LDFLAGS)
+    \t$(CC) $(CFLAGS_INSTRUMENT) -o $@ $(OBJS) $(TRACE_OBJ) $(LDFLAGS)
 
 The fragment expects SRCS, BUILDDIR, BINDIR, TARGET, CC, CFLAGS_SYMBOLS and
 LDFLAGS from your Makefile; see callsight/Makefile.callsight for details."""
@@ -141,6 +145,231 @@ def cmd_init(args):
               "callsight/zstd.c")
     print()
     print("Then: build, run with TRACE_ENABLE=1, and 'callsight analyze traces/'.")
+
+
+def cmd_run(args):
+    """Run an instrumented binary with tracing on, then report on it.
+
+    The four-step loop (export, run, find the binary, analyze) is the same
+    every time and easy to get subtly wrong — a stale traces/ directory
+    silently mixes two runs into one report."""
+    import subprocess
+
+    command = list(args.command)
+    # REMAINDER hands back the '--' separator itself; it is punctuation for
+    # argparse, not the program to run.
+    if command and command[0] == "--":
+        command.pop(0)
+    if not command:
+        sys.exit("run: give the command to run, e.g. "
+                 "callsight run -- ./bin/app.instr --flag")
+    args.command = command
+
+    tracedir = Path(args.dir)
+    tracedir.mkdir(parents=True, exist_ok=True)
+    stale = sorted(tracedir.glob("trace.*.bin"))
+    if stale and not args.keep:
+        for f in stale:
+            f.unlink()
+        print(f"removed {len(stale)} trace file(s) from a previous run in "
+              f"{tracedir}/")
+    elif stale:
+        print(f"keeping {len(stale)} existing trace file(s) in {tracedir}/ "
+              f"— the report will cover both runs")
+
+    env = dict(os.environ)
+    env["TRACE_ENABLE"] = "1"
+    env["TRACE_DIR"] = str(tracedir.resolve())
+    env["TRACE_MODE"] = args.mode
+    if args.max_mb is not None:
+        env["TRACE_MAX_MB"] = str(args.max_mb)
+    if args.max_events is not None:
+        env["TRACE_MAX"] = str(args.max_events)
+    if args.full:
+        env["TRACE_FULL"] = args.full
+    if args.threads:
+        env["TRACE_THREADS"] = args.threads
+    if args.clock:
+        env["TRACE_CLOCK"] = args.clock
+
+    try:
+        proc = subprocess.Popen(args.command, env=env)
+    except FileNotFoundError:
+        sys.exit(f"run: {args.command[0]}: not found")
+    except PermissionError:
+        sys.exit(f"run: {args.command[0]}: not executable")
+
+    try:
+        proc.wait(timeout=args.timeout)
+    except subprocess.TimeoutExpired:
+        # SIGTERM first: a program that exits cleanly flushes each thread's
+        # buffered tail, which a SIGKILL would throw away.
+        print(f"\n(traced for {args.timeout}s; stopping the program)\n",
+              file=sys.stderr)
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+    except KeyboardInterrupt:
+        proc.terminate()
+        proc.wait()
+    if proc.returncode not in (0, -15, None):
+        # Not fatal: a workload killed by a timeout still produced a trace,
+        # and that is often exactly the run worth looking at.
+        print(f"\n(the traced program exited with status {proc.returncode}; "
+              f"reporting on what it recorded)\n", file=sys.stderr)
+
+    exe = args.exe or args.command[0]
+    try:
+        if args.out:
+            # The traced program writes to the same stdout we do, so a
+            # machine-readable report has to go somewhere of its own.
+            with open(args.out, "w") as fh:
+                with _redirect_stdout(fh):
+                    analyze.report(str(tracedir), exe, args.top, args.format,
+                                   args.addr2line, args.subtract_overhead)
+            print(f"\nwrote {args.format} report to {args.out}",
+                  file=sys.stderr)
+        else:
+            print()
+            analyze.report(str(tracedir), exe, args.top, args.format,
+                           args.addr2line, args.subtract_overhead)
+    except RuntimeError as e:
+        sys.exit(str(e))
+
+
+def cmd_diff(args):
+    """Compare two JSON reports so a build can fail on a regression."""
+    try:
+        rows, worst = analyze.diff(args.base, args.new, args.key,
+                                   args.threshold)
+    except OSError as e:
+        sys.exit(f"diff: {e}")
+    except (ValueError, KeyError) as e:
+        sys.exit(f"diff: {args.base}/{args.new} are not callsight JSON "
+                 f"reports ({e})")
+    analyze.print_diff(rows, args.key)
+    if args.fail_over is not None and worst > args.fail_over:
+        sys.exit(f"\nregression: {worst:.1f}% exceeds the "
+                 f"{args.fail_over:.1f}% budget")
+
+
+def _doctor_check(label, ok, detail, advisory=False):
+    """advisory=True reports a fact without calling it a failure — not
+    every observation is a problem, and marking one FAIL and then declaring
+    'no problems found' is worse than saying nothing."""
+    mark = "ok  " if ok else ("note" if advisory else "FAIL")
+    print(f"[{mark}] {label}: {detail}")
+    return ok or advisory
+
+
+def cmd_doctor(args):
+    """Check everything an instrumented build and analysis depends on."""
+    import shutil as _shutil
+    import subprocess
+
+    project = Path(args.project).resolve()
+    problems = 0
+
+    print(f"callsight {package_version()} — checking {project}")
+    print()
+
+    cc = os.environ.get("CC") or "cc"
+    compiler = flags.detect_compiler(cc)
+    if compiler == "gcc":
+        detail = f"{cc} is GCC — selective instrumentation available"
+        ok = True
+    elif compiler == "clang":
+        detail = (f"{cc} is Clang — the exclude-list flags are GCC-only "
+                  f"(LLVM #15627), so only an instrument-everything config "
+                  f"will build; set CC=gcc for selective coverage")
+        ok = False
+    else:
+        detail = f"could not identify {cc}; callsight will assume GCC"
+        ok = True
+    problems += not _doctor_check("compiler", ok, detail)
+
+    a2l = analyze.addr2line_cmd()
+    found = _shutil.which(a2l)
+    problems += not _doctor_check(
+        "addr2line", bool(found),
+        f"{found}" if found else
+        f"{a2l} not on PATH — install binutils, or set "
+        f"CALLSIGHT_ADDR2LINE to your cross-toolchain's copy")
+
+    config = project / args.config
+    if config.exists():
+        try:
+            includes, excludes, funcs, include_funcs = \
+                flags.parse_config(str(config))
+            sources = flags.scan_sources(project)
+            if include_funcs:
+                selected, dropped = flags.function_selection(
+                    include_funcs, sources, includes, excludes)[:2]
+            else:
+                selected, dropped = flags.select(sources, includes, excludes)
+            _doctor_check("trace.config", True,
+                          f"{len(sources)} sources, {len(selected)} "
+                          f"instrumented, {len(dropped)} excluded")
+            if not selected:
+                problems += 1
+                print("       nothing would be instrumented — check the "
+                      "include patterns")
+        except Exception as e:  # a bad config should not crash the check
+            problems += not _doctor_check("trace.config", False, str(e))
+    else:
+        _doctor_check("trace.config", True,
+                      f"none at {config} (callsight init writes one)")
+
+    tracedir = project / args.dir
+    try:
+        tracedir.mkdir(parents=True, exist_ok=True)
+        probe = tracedir / ".callsight-write-probe"
+        probe.write_bytes(b"x")
+        probe.unlink()
+        writable = True
+        detail = f"{tracedir} is writable"
+    except OSError as e:
+        writable = False
+        detail = f"{tracedir}: {e}"
+    problems += not _doctor_check("trace directory", writable, detail)
+
+    if writable:
+        st = os.statvfs(tracedir)
+        free_mb = st.f_bavail * st.f_frsize // (1024 * 1024)
+        problems += not _doctor_check(
+            "free space", free_mb >= 64,
+            f"{free_mb} MB available (the runtime stops below "
+            f"TRACE_MIN_FREE_MB, default 64)")
+
+    shm = Path("/dev/shm")
+    _doctor_check("shared memory", shm.is_dir() and os.access(shm, os.W_OK),
+                  f"{shm} available (needed only for TRACE_SHM streaming)",
+                  advisory=True)
+
+    runtime = project / "callsight" / "trace.c"
+    _doctor_check("runtime in project", runtime.exists(),
+                  f"{runtime}" if runtime.exists() else
+                  f"not adopted here yet — run: callsight init {project}",
+                  advisory=True)
+
+    try:
+        out = subprocess.run([cc, "-fsyntax-only", "-finstrument-functions",
+                              "-xc", "-"], input="int main(void){return 0;}",
+                             capture_output=True, text=True, timeout=30)
+        problems += not _doctor_check(
+            "-finstrument-functions", out.returncode == 0,
+            "accepted by the compiler" if out.returncode == 0
+            else (out.stderr or "").strip().splitlines()[:1])
+    except (OSError, subprocess.TimeoutExpired) as e:
+        problems += not _doctor_check("-finstrument-functions", False, str(e))
+
+    print()
+    if problems:
+        sys.exit(f"{problems} problem(s) found.")
+    print("No problems found.")
 
 
 def cmd_scan(args):
@@ -283,7 +512,7 @@ def cmd_serve(args):
         sys.exit("the streaming server needs the optional dependencies — "
                  "install with: uv tool install 'callsight[stream]'")
     from callsight.serve import serve
-    serve(args.host, args.port, args.out)
+    serve(args.host, args.port, args.out, args.max_mb, args.seg_mb)
 
 
 def package_version():
@@ -324,6 +553,66 @@ def main(argv=None):
                              "(trace_stream.c + vendored single-file zstd)")
     p_init.set_defaults(func=cmd_init)
 
+    p_run = sub.add_parser("run", help="run an instrumented binary with "
+                                       "tracing on and report")
+    p_run.add_argument("--dir", default="traces",
+                       help="trace directory (default: traces)")
+    p_run.add_argument("--keep", action="store_true",
+                       help="keep trace files from earlier runs instead of "
+                            "clearing them first")
+    p_run.add_argument("--exe", default=None,
+                       help="binary to symbolize with (default: the command)")
+    p_run.add_argument("--mode", choices=("events", "summary"),
+                       default="events",
+                       help="events records every call; summary aggregates "
+                            "in-process, for runs of any length")
+    p_run.add_argument("--max-mb", type=int, default=None,
+                       help="on-disk budget (TRACE_MAX_MB)")
+    p_run.add_argument("--max-events", type=int, default=None,
+                       help="global event cap (TRACE_MAX)")
+    p_run.add_argument("--full", choices=("stop", "wrap"), default=None,
+                       help="what to do at the budget: keep the start (stop) "
+                            "or the end (wrap)")
+    p_run.add_argument("--timeout", type=float, default=None,
+                       help="stop the program after this many seconds and "
+                            "report on what it recorded")
+    p_run.add_argument("--threads", default=None,
+                       help="only trace threads matching these globs")
+    p_run.add_argument("--clock", choices=("auto", "mono", "raw", "tsc"),
+                       default=None, help="timestamp source")
+    p_run.add_argument("--top", type=int, default=20)
+    p_run.add_argument("--format", choices=("text", "json", "folded",
+                                            "chrome", "callers"),
+                       default="text")
+    p_run.add_argument("--addr2line", default=None)
+    p_run.add_argument("--subtract-overhead", action="store_true")
+    p_run.add_argument("--out", default=None,
+                       help="write the report to this file instead of "
+                            "stdout, which the traced program shares")
+    p_run.add_argument("command", nargs=argparse.REMAINDER,
+                       help="the command to run (put it after --)")
+    p_run.set_defaults(func=cmd_run)
+
+    p_diff = sub.add_parser("diff", help="compare two JSON reports")
+    p_diff.add_argument("base", help="baseline --format json report")
+    p_diff.add_argument("new", help="new --format json report")
+    p_diff.add_argument("--key", default="self_ms",
+                        help="metric to compare (default: self_ms)")
+    p_diff.add_argument("--threshold", type=float, default=0.0,
+                        help="ignore changes smaller than this, in --key "
+                             "units")
+    p_diff.add_argument("--fail-over", type=float, default=None,
+                        help="exit non-zero if any function regresses by "
+                             "more than this percentage")
+    p_diff.set_defaults(func=cmd_diff)
+
+    p_doc = sub.add_parser("doctor", help="check the toolchain and "
+                                          "environment")
+    p_doc.add_argument("project", nargs="?", default=".")
+    p_doc.add_argument("--config", default="trace.config")
+    p_doc.add_argument("--dir", default="traces")
+    p_doc.set_defaults(func=cmd_doctor)
+
     p_scan = sub.add_parser("scan", help="show instrumentation selection")
     p_scan.add_argument("directory", help="source tree to scan")
     p_scan.add_argument("--config", default="trace.config")
@@ -362,6 +651,12 @@ def main(argv=None):
     p_serve.add_argument("--port", type=int, default=9001)
     p_serve.add_argument("--out", default="traces",
                          help="output directory for trace.stream.*.bin")
+    p_serve.add_argument("--max-mb", type=int, default=4096,
+                         help="per-connection output budget (default 4096); "
+                              "a device streaming for an hour must not fill "
+                              "the analysis host either")
+    p_serve.add_argument("--seg-mb", type=int, default=256,
+                         help="segment size for rotation (default 256)")
     p_serve.set_defaults(func=cmd_serve)
 
     sub.add_parser("flags", help="print compiler flags "

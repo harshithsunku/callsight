@@ -16,16 +16,20 @@
 #   CALLSIGHT_CONFIG      selection config (default: <source dir>/trace.config)
 #   CALLSIGHT_COMMAND     command that prints the flags (default: callsight;
 #                        may be a ;-list, e.g. "python3;/path/to/flags.py")
+#   CALLSIGHT_NO_PIE      OFF by default. The runtime records the PIE load
+#                        bias in every trace header, so position-independent
+#                        executables symbolize correctly and forcing -no-pie
+#                        is no longer needed — and forcing it would profile a
+#                        binary built differently from the one you ship.
 #
-# The compile options and -no-pie are only applied when CALLSIGHT_INSTRUMENT=ON.
-# -no-pie keeps runtime addresses equal to link addresses so `callsight
-# analyze` can resolve symbols with addr2line directly.
+# Compile options are only applied when CALLSIGHT_INSTRUMENT=ON.
 
 option(CALLSIGHT_INSTRUMENT "Build with callsight compile-time tracing" OFF)
 set(CALLSIGHT_CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/trace.config"
     CACHE FILEPATH "callsight selection config")
 set(CALLSIGHT_COMMAND "callsight"
     CACHE STRING "command used to generate instrumentation flags")
+option(CALLSIGHT_NO_PIE "Link instrumented targets with -no-pie" OFF)
 
 function(callsight_instrument target)
     if(NOT CALLSIGHT_INSTRUMENT)
@@ -75,6 +79,8 @@ function(callsight_instrument target)
     set_source_files_properties("${_runtime}"
         PROPERTIES COMPILE_OPTIONS "-fno-instrument-functions")
 
-    target_link_options(${target} PRIVATE -no-pie)
+    if(CALLSIGHT_NO_PIE)
+        target_link_options(${target} PRIVATE -no-pie)
+    endif()
     message(STATUS "callsight: instrumenting target ${target}")
 endfunction()

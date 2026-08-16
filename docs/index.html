@@ -34,6 +34,7 @@
     <div class="topnav-links">
       <a href="getting-started.html">Getting started</a>
       <a href="configuration.html">Configuration</a>
+      <a href="capture.html">Capture</a>
       <a href="analysis.html">Analysis</a>
       <a href="web-ui.html">Web UI</a>
       <a href="streaming.html">Streaming</a>
@@ -72,7 +73,7 @@
       <img alt="PyPI" src="https://img.shields.io/pypi/v/callsight.svg?style=flat-square&color=818cf8">
       <img alt="compilers" src="https://img.shields.io/badge/GCC-selective-34d399?style=flat-square">
       <img alt="languages" src="https://img.shields.io/badge/C_%7C_C++-Make_%7C_CMake-9aa5b4?style=flat-square">
-      <img alt="overhead" src="https://img.shields.io/badge/hook-~30–60_ns-f59e0b?style=flat-square">
+      <img alt="overhead" src="https://img.shields.io/badge/hook-~12_ns-f59e0b?style=flat-square">
     </div>
     <div class="hero-shot">
       <img src="assets/flamegraph.svg" alt="Flame graph of a multi-threaded C workload: thread_main splits into workload_matrix, workload_signal, workload_stats, workload_crypto and workload_sort, with the recursive fft and quicksort towers clearly visible" loading="eager">
@@ -117,17 +118,28 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l3.5-4 3 2.5L20 7"/></svg>
         </div>
         <h3>Exact, not sampled</h3>
-        <p>Every call is counted and timed: calls, inclusive, self and max time per
-        function, matched per thread. No statistical blur, no missed rare-but-slow paths.</p>
+        <p>Every call is counted and timed, so <strong>p50, p99 and max are measurements</strong>
+        rather than estimates — the rare slow call a sampling profiler would miss entirely
+        is right there in the table.</p>
       </div>
       <div class="feature">
         <div class="feature-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2c1.5 3.5-.5 5-1.5 6.5C9 11 9.5 13 12 14c2-1 2.5-3 1.5-5.5C16 10 18 12 18 15a6 6 0 0 1-12 0c0-3 2-5 6-13z"/></svg>
         </div>
-        <h3>Flame graphs &amp; JSON</h3>
-        <p><code>--format folded</code> feeds flamegraph.pl and speedscope directly;
-        <code>--format json</code> gives you the whole report — counters, rows, per-thread
-        timing — for your own tooling.</p>
+        <h3>Exports that fit your tools</h3>
+        <p><code>folded</code> for flamegraph.pl and speedscope, <code>chrome</code> for a
+        real timeline in Perfetto, <code>callers</code> for hot call sites, and
+        <code>json</code> plus <code>callsight diff</code> to fail a build on a
+        regression.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5.5 5.5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1.2"/><path d="M1.5 9a15 15 0 0 1 21 0"/></svg>
+        </div>
+        <h3>It cannot fill your disk</h3>
+        <p>Capture is bounded by default, rotates in segments, stops before the filesystem
+        does — and says so in the report. <code>TRACE_MODE=summary</code> aggregates
+        in-process instead: hours of execution, kilobytes of output, exact counts.</p>
       </div>
       <div class="feature">
         <div class="feature-icon">
@@ -327,15 +339,19 @@ include-func workload_sort</code></pre>
       exclusion. <code>unmatched_exits=0</code> means the trace is clean.
     </p>
     <pre><code><span class="p">$</span> callsight analyze traces/ --exe bin/matrixlab.instr --top 5
-events=<span class="n">1000000</span> threads=<span class="n">26</span> functions=<span class="n">139</span> span=48.7ms <span class="s">unmatched_exits=0</span> unclosed_enters=136
+events=<span class="n">850059</span> threads=<span class="n">24</span> functions=<span class="n">84</span> span=6.6ms <span class="s">unmatched_exits=0</span> unclosed_enters=127
 
 == TOP BY SELF TIME ==
-     calls      incl_ms      self_ms       max_ms  function (first location)
-       272      529.382      529.382        9.983  timer_sleep_us (src/utils/timer.c:38)
-    127048       52.470       52.470        6.643  qs_swap (src/sort/quicksort.c:5)
-     57284      366.418       35.370        5.738  fft_recursive (src/signal/fft.c:63)
-    104870       33.523       33.523       10.017  stats_running_push (src/stats/statistics.c:84)
-      3195       60.699       30.238       18.485  qs_partition (src/sort/quicksort.c:23)</code></pre>
+     calls      incl_ms      self_ms       p50       p99       max  function (first location)
+        12       13.170       13.170  983.04us    1.97ms    1.97ms  timer_sleep_us (src/utils/timer.c:38)
+     16111       11.098        6.518      71ns    3.84us    1.59ms  qs_partition (src/sort/quicksort.c:23)
+    358383        4.738        4.738       8ns      14ns  352.74us  qs_swap (src/sort/quicksort.c:5)
+         4        2.335        2.230  180.22us    1.70ms    1.79ms  matrix_multiply_blocked (src/matrix/matrix_multiply.c:24)
+       384        1.450        1.450    4.61us    5.63us    7.75us  matrix_lu_solve (src/matrix/matrix_decomp.c:48)</code></pre>
+    <p class="section-sub" style="margin-top:18px">
+      <code>qs_swap</code> normally finishes in 8&nbsp;ns and once took 352&nbsp;µs. A mean
+      hides both numbers; a sampling profiler would almost certainly never see that call.
+    </p>
     <div class="shots" style="margin-top:30px">
       <div class="shot">
         <img src="screenshots/02-report.png" alt="The callsight web UI hotspot table: sortable columns for calls, inclusive ms, self ms and max ms, with resolved function names and source locations" loading="lazy">
@@ -378,7 +394,8 @@ events=<span class="n">1000000</span> threads=<span class="n">26</span> function
         <div class="step-body">
           <h3>Build and run</h3>
           <p>The instrumented profile is separate from your normal build, and stays inert
-          until you ask for a trace.</p>
+          until you ask for a trace. <code>callsight run</code> traces it and reports in
+          one step.</p>
           <div data-tabs>
             <div class="tabs">
               <button class="tab-btn active" data-tab="make">Make</button>
@@ -386,12 +403,12 @@ events=<span class="n">1000000</span> threads=<span class="n">26</span> function
             </div>
             <div class="tab-panel active" data-tab="make">
               <pre><code><span class="p">$</span> make instrument
-<span class="p">$</span> TRACE_ENABLE=1 TRACE_MAX=1000000 ./bin/yourapp.instr</code></pre>
+<span class="p">$</span> callsight run -- ./bin/yourapp.instr</code></pre>
             </div>
             <div class="tab-panel" data-tab="cmake">
               <pre><code><span class="p">$</span> cmake -DCALLSIGHT_INSTRUMENT=ON -B build-instr
 <span class="p">$</span> cmake --build build-instr
-<span class="p">$</span> TRACE_ENABLE=1 TRACE_MAX=1000000 ./build-instr/yourapp</code></pre>
+<span class="p">$</span> callsight run -- ./build-instr/yourapp</code></pre>
             </div>
           </div>
         </div>
@@ -400,9 +417,11 @@ events=<span class="n">1000000</span> threads=<span class="n">26</span> function
         <div class="step-num">4</div>
         <div class="step-body">
           <h3>Analyze</h3>
-          <p>Terminal tables, a flame graph, or JSON for your own tooling.</p>
+          <p>Terminal tables, a flame graph, a Perfetto timeline, or JSON for your own
+          tooling.</p>
           <pre><code><span class="p">$</span> callsight analyze traces/ --exe ./bin/yourapp.instr --top 20
-<span class="p">$</span> callsight analyze traces/ --exe ./bin/yourapp.instr --format folded &gt; out.folded</code></pre>
+<span class="p">$</span> callsight analyze traces/ --exe ./bin/yourapp.instr --format folded &gt; out.folded
+<span class="p">$</span> callsight analyze traces/ --exe ./bin/yourapp.instr --format chrome &gt; trace.json</code></pre>
         </div>
       </div>
     </div>
@@ -414,9 +433,10 @@ events=<span class="n">1000000</span> threads=<span class="n">26</span> function
     <span class="eyebrow">Where it fits</span>
     <h2>How it compares.</h2>
     <p class="section-sub">
-      Reach for <code>perf</code> first when you want a cheap statistical profile of a whole
-      system. Reach for callsight when you need exact per-call timing for a chosen
-      subsystem — and zero cost for everything else.
+      Reach for <code>perf</code> first when you want a cheap statistical profile of a
+      whole system, kernel time, or hardware counters. Reach for callsight when you need
+      <em>exactness</em> for code you chose — every call counted, true tail latency per
+      function, and zero cost for everything you did not choose.
     </p>
     <div class="table-scroll">
       <table class="ref">
@@ -483,6 +503,7 @@ events=<span class="n">1000000</span> threads=<span class="n">26</span> function
   <div class="foot-row">
     <a href="getting-started.html">Getting started</a>
     <a href="configuration.html">Configuration</a>
+    <a href="capture.html">Capture</a>
     <a href="analysis.html">Analysis</a>
     <a href="web-ui.html">Web UI</a>
     <a href="streaming.html">Streaming</a>

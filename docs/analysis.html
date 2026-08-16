@@ -27,6 +27,7 @@
     <div class="topnav-links">
       <a href="getting-started.html">Getting started</a>
       <a href="configuration.html">Configuration</a>
+      <a href="capture.html">Capture</a>
       <a href="analysis.html" class="active">Analysis</a>
       <a href="web-ui.html">Web UI</a>
       <a href="streaming.html">Streaming</a>
@@ -59,15 +60,15 @@
 
 <h2 id="report">The report</h2>
 <pre><code><span class="p">$</span> callsight analyze traces/ --exe bin/matrixlab.instr --top 5
-events=<span class="n">1000000</span> threads=<span class="n">26</span> functions=<span class="n">139</span> span=48.7ms <span class="s">unmatched_exits=0</span> unclosed_enters=136
+events=<span class="n">850059</span> threads=<span class="n">24</span> functions=<span class="n">84</span> span=6.6ms <span class="s">unmatched_exits=0</span> unclosed_enters=127
 
 == TOP BY SELF TIME ==
-     calls      incl_ms      self_ms       max_ms  function (first location)
-       272      529.382      529.382        9.983  timer_sleep_us (src/utils/timer.c:38)
-    127048       52.470       52.470        6.643  qs_swap (src/sort/quicksort.c:5)
-     57284      366.418       35.370        5.738  fft_recursive (src/signal/fft.c:63)
-    104870       33.523       33.523       10.017  stats_running_push (src/stats/statistics.c:84)
-      3195       60.699       30.238       18.485  qs_partition (src/sort/quicksort.c:23)
+     calls      incl_ms      self_ms       p50       p99       max  function (first location)
+        12       13.170       13.170  983.04us    1.97ms    1.97ms  timer_sleep_us (src/utils/timer.c:38)
+     16111       11.098        6.518      71ns    3.84us    1.59ms  qs_partition (src/sort/quicksort.c:23)
+    358383        4.738        4.738       8ns      14ns  352.74us  qs_swap (src/sort/quicksort.c:5)
+         4        2.335        2.230  180.22us    1.70ms    1.79ms  matrix_multiply_blocked (src/matrix/matrix_multiply.c:24)
+       384        1.450        1.450    4.61us    5.63us    7.75us  matrix_lu_solve (src/matrix/matrix_decomp.c:48)
 
 == TOP BY INCLUSIVE TIME ==
 …
@@ -77,6 +78,11 @@ events=<span class="n">1000000</span> threads=<span class="n">26</span> function
 <p>Trace files are streamed rather than loaded, so a multi-million-event run costs a few
 MB of analyzer memory instead of scaling with the event count.</p>
 
+<p>Look at the <code>qs_swap</code> row. Half its calls finish in 8&nbsp;ns and 99% within
+14&nbsp;ns, yet its slowest single call took 352&nbsp;µs — the thread was descheduled
+mid-call. A mean would have hidden both facts; a sampling profiler would have had almost
+no chance of catching that one call at all.</p>
+
 <h3 id="columns">The columns</h3>
 <div class="table-scroll">
 <table class="ref">
@@ -85,9 +91,17 @@ MB of analyzer memory instead of scaling with the event count.</p>
     <tr><td class="nowrap"><code>calls</code></td><td>Times the function was entered and matched with an exit.</td><td><strong>Exclusion candidates.</strong> The biggest numbers are your event volume.</td></tr>
     <tr><td class="nowrap"><code>incl_ms</code></td><td>Wall time from enter to exit, children included. Recursive frames each count their own span.</td><td><strong>Which high-level operation is slow.</strong></td></tr>
     <tr><td class="nowrap"><code>self_ms</code></td><td>Inclusive minus the time spent inside instrumented children.</td><td><strong>Where the work actually happens.</strong> The hot leaves.</td></tr>
-    <tr><td class="nowrap"><code>max_ms</code></td><td>The single slowest call.</td><td><strong>Tail latency.</strong> A small mean with a large max is a stall.</td></tr>
+    <tr><td class="nowrap"><code>p50</code>, <code>p99</code></td><td>Per-call duration percentiles, from a histogram kept per function.</td><td><strong>What a call normally costs, and what it costs when it doesn't.</strong></td></tr>
+    <tr><td class="nowrap"><code>max</code></td><td>The single slowest call, tracked exactly.</td><td><strong>The worst case that actually happened.</strong></td></tr>
   </tbody>
 </table>
+</div>
+<div class="note">
+  <strong>The percentiles are the thing sampling cannot give you.</strong> A sampling
+  profiler estimates where time goes by interrupting periodically; a call that runs rarely
+  and slowly is likely to be missed entirely. Here every call is timed, so p99 and max are
+  measurements. The percentiles come from a log-scale histogram (four sub-buckets per
+  octave, so within a few percent); <code>min</code> and <code>max</code> are exact.
 </div>
 <div class="note">
   <strong>Self time is only "self" relative to what you instrumented.</strong> Time spent
@@ -107,9 +121,20 @@ MB of analyzer memory instead of scaling with the event count.</p>
     <tr><td class="nowrap"><code>span</code></td><td>First to last timestamp across all threads.</td></tr>
     <tr><td class="nowrap"><code>unmatched_exits</code></td><td>Exits with no matching enter. <strong>0 means a clean trace.</strong></td></tr>
     <tr><td class="nowrap"><code>unclosed_enters</code></td><td>Frames still open at the end — normal: threads parked inside a call when the run ended, or when <code>TRACE_MAX</code> stopped collection mid-stack.</td></tr>
+    <tr><td class="nowrap"><code>mode=summary</code></td><td>Present only for <a href="capture.html#summary">summary traces</a>, which carry per-function totals instead of events.</td></tr>
   </tbody>
 </table>
 </div>
+
+<h3 id="notices">Lines starting with <code>!</code></h3>
+<p>If capture ended for any reason other than the program finishing, the runtime records
+that <em>in the trace</em> and the report says so before the tables:</p>
+<pre><code>events=850059 threads=24 functions=84 span=6.6ms unmatched_exits=0 unclosed_enters=127
+<span class="s">! capture stopped: the 512 MB on-disk budget was reached (TRACE_MAX_MB); everything
+  after that point is missing</span></code></pre>
+<p>This matters more than any row in the table, because it changes what the table means: a
+report covering the first 20% of a run is not a report about the run. The
+<a href="capture.html#notices">capture page</a> lists every notice.</p>
 
 <h2 id="flame">Flame graphs</h2>
 <p><code>--format folded</code> prints one collapsed stack per call path, with self time in
@@ -133,6 +158,51 @@ thread_main;workload_signal;workload_sleep;timer_adaptive_sleep;timer_sleep_us 9
 <p>Because the values are self time, the folded total equals the sum of the
 <code>self_ms</code> column — the flame graph and the table are two views of exactly the
 same numbers.</p>
+
+<h2 id="timeline">A real timeline</h2>
+<p>A flame graph aggregates: it shows where time went, not when. <code>--format chrome</code>
+emits the Chrome trace format, which
+<a href="https://ui.perfetto.dev" target="_blank" rel="noopener">ui.perfetto.dev</a> opens
+directly — every call as its own span, on its own thread, with true nesting.</p>
+<pre><code><span class="p">$</span> callsight analyze traces/ --exe ./yourapp.instr --format chrome &gt; trace.json
+<span class="c"># open trace.json at ui.perfetto.dev</span></code></pre>
+<p>Use it when the question is about ordering or concurrency — which thread blocked, what
+ran while it waited, whether two operations overlapped. The output is proportional to the
+number of calls, so narrow the capture first.</p>
+
+<h2 id="callers">Which call site is the expensive one</h2>
+<p>A hot function usually has several callers, and they rarely cost the same.
+<code>--format callers</code> breaks each function down by the place it was called from:</p>
+<pre><code><span class="p">$</span> callsight analyze traces/ --exe ./yourapp.instr --format callers
+     calls      incl_ms  callee &lt;- call site
+     10000        0.157  leaf &lt;- mid (src/work.c:41)
+       500        0.255  mid &lt;- top (src/work.c:63)</code></pre>
+<p>The runtime records the return address of every call, which resolves to the exact line
+that made it. The caller's <em>name</em> comes from the shadow stack rather than from
+symbolizing that address: when GCC inlines a function the hooks travel with the inlined
+body, so the return address lands in whichever function absorbed the code. The stack knows
+who logically called whom.</p>
+
+<h2 id="regressions">Catching regressions</h2>
+<p>Two JSON reports can be compared function by function. Because the call counts are exact
+rather than sampled, the comparison is real enough to gate a build on:</p>
+<pre><code><span class="p">$</span> callsight diff base.json new.json --threshold 0.5
+base_self_ms  new_self_ms        delta    change  function
+       0.077        1.181       +1.104  +1431.8%  deep_compute_2
+       1.286        0.699       -0.587    -45.6%  matrix_fill_random
+
+<span class="p">$</span> callsight diff base.json new.json --fail-over 10   <span class="c"># exit 1 on a &gt;10% regression</span></code></pre>
+<p>Compare like with like: a fixed workload, the same capture limits, and ideally
+<code>--mode summary</code> so neither run is cut short by a budget.</p>
+
+<h2 id="overhead">Correcting for the measurement</h2>
+<p>The runtime measures its own per-hook cost at startup and records it in the trace.
+<code>--subtract-overhead</code> deducts it — the function's own boundary, plus two hooks
+for every instrumented call nested inside the window:</p>
+<pre><code><span class="p">$</span> callsight analyze traces/ --exe ./yourapp.instr --subtract-overhead</code></pre>
+<p>It is off by default, because the default report should be what was measured rather
+than what was inferred. It matters most for functions with very short bodies and many
+instrumented children, which is exactly where raw instrumentation numbers mislead.</p>
 
 <h2 id="json">JSON for your own tooling</h2>
 <pre><code><span class="p">$</span> callsight analyze traces/ --exe ./yourapp.instr --format json --top 0 &gt; report.json</code></pre>
@@ -174,9 +244,14 @@ a function's call count or self time hasn't regressed.</p>
 <h2 id="troubleshooting">When a trace looks wrong</h2>
 
 <h3 id="tr-symbols">Every function is <code>??</code></h3>
-<p>The binary was linked as a position-independent executable, so recorded runtime
-addresses don't match link addresses. <code>analyze</code> warns when most addresses fail
-to resolve. Relink with <code>-no-pie</code> — both build integrations already do.</p>
+<p>Almost always <code>--exe</code> pointing at a different binary from the one that
+produced the trace — a rebuild between the run and the analysis is enough.
+<code>analyze</code> warns when most addresses fail to resolve.</p>
+<p>Two other causes. If the trace is <strong>version 1</strong> (written before the load
+bias was recorded) and the binary is a PIE, relink with <code>-no-pie</code> or re-record
+with a current runtime. If the binary was <strong>cross-compiled</strong>, the host
+<code>addr2line</code> cannot read it — point at the matching toolchain:</p>
+<pre><code><span class="p">$</span> callsight analyze traces/ --exe ./app.instr --addr2line arm-none-eabi-addr2line</code></pre>
 
 <h3 id="tr-missing">A function I expected is missing</h3>
 <ul>
@@ -218,7 +293,12 @@ threads must finish) for the last buffers to flush.</p>
     <li><a href="#report">The report</a></li>
     <li class="sub"><a href="#columns">The columns</a></li>
     <li class="sub"><a href="#summary">The summary line</a></li>
+    <li class="sub"><a href="#notices">Capture notices</a></li>
     <li><a href="#flame">Flame graphs</a></li>
+    <li><a href="#timeline">A real timeline</a></li>
+    <li><a href="#callers">Hot call sites</a></li>
+    <li><a href="#regressions">Catching regressions</a></li>
+    <li><a href="#overhead">Overhead correction</a></li>
     <li><a href="#json">JSON output</a></li>
     <li><a href="#workflow">The tightening loop</a></li>
     <li><a href="#troubleshooting">When a trace looks wrong</a></li>
@@ -231,6 +311,7 @@ threads must finish) for the last buffers to flush.</p>
     <a href="./">Home</a>
     <a href="getting-started.html">Getting started</a>
     <a href="configuration.html">Configuration</a>
+    <a href="capture.html">Capture</a>
     <a href="web-ui.html">Web UI</a>
     <a href="streaming.html">Streaming</a>
     <a href="architecture.html">Architecture</a>

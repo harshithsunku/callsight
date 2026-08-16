@@ -18,6 +18,66 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv run --python ${{ matrix.python-version }} python -m unittest discover -s tests
 
+  test-ui:
+    # The UI tests skip themselves without FastAPI, so they need one leg
+    # where the extra is actually installed or they never run at all.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv run --extra ui python -m unittest discover -s tests
+
+  runtime:
+    # The C runtime — segment rotation, budgets, fork safety, the failure
+    # paths — only exists in compiled code, so it gets its own suite.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: runtime compiles clean under strict warnings
+        run: |
+          gcc -std=c11 -O2 -Wall -Wextra -pedantic -Werror \
+            -c -o /tmp/trace.o src/callsight/runtime/trace.c
+          gcc -std=c11 -O2 -Wall -Wextra -pedantic -Werror \
+            -I src/callsight/runtime -c -o /tmp/stream.o \
+            src/callsight/stream/trace_stream.c
+      - name: runtime behaviour tests
+        run: uv run python tests/runtime/test_runtime.py
+      - name: overhead benchmark still runs
+        # Small and fast: this guards the harness that produces the published
+        # numbers, not the numbers themselves — a shared CI runner is far too
+        # noisy to assert a threshold on.
+        run: uv run python tests/bench/run_bench.py --iters 200000 --repeat 2
+
+  runtime-tsan:
+    # The hot path is lock-free and per-thread; a data race there would be
+    # invisible in ordinary runs and wrong under load.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build instrumented probe with ThreadSanitizer
+        run: |
+          gcc -std=c11 -O1 -g -fsanitize=thread \
+            -I src/callsight/runtime -finstrument-functions \
+            -c -o /tmp/probe.o tests/runtime/runtime_probe.c
+          gcc -std=c11 -O1 -g -fsanitize=thread \
+            -I src/callsight/runtime -c -o /tmp/rt.o \
+            src/callsight/runtime/trace.c
+          gcc -fsanitize=thread -o /tmp/probe /tmp/probe.o /tmp/rt.o -lpthread
+      - name: race-check the threaded paths
+        env:
+          TSAN_OPTIONS: halt_on_error=1:exitcode=1
+        run: |
+          mkdir -p /tmp/tsan-traces
+          TRACE_ENABLE=1 TRACE_DIR=/tmp/tsan-traces TRACE_SEG_MB=1 \
+            TRACE_MAX_MB=16 /tmp/probe threads 4 3000
+          TRACE_ENABLE=1 TRACE_DIR=/tmp/tsan-traces TRACE_SEG_MB=1 \
+            TRACE_MAX_MB=8 TRACE_FULL=wrap /tmp/probe threads 4 8000
+          TRACE_ENABLE=1 TRACE_DIR=/tmp/tsan-traces TRACE_MAX=20000 \
+            /tmp/probe churn 12 200
+          TRACE_ENABLE=1 TRACE_DIR=/tmp/tsan-traces TRACE_MODE=summary \
+            /tmp/probe threads 4 3000
+
   smoke-make:
     runs-on: ubuntu-latest
     steps:
@@ -32,6 +92,44 @@ jobs:
           uv run callsight analyze traces/ --exe bin/matrixlab.instr \
             | tee analyze.out
           grep -q "unmatched_exits=0" analyze.out
+          # Percentiles come from the histogram, not from a mean.
+          grep -q "p99" analyze.out
+      - name: capture budget is enforced
+        run: |
+          cd tests/matrixlab
+          rm -rf traces
+          # A run that would write far more than the cap must not.
+          TRACE_ENABLE=1 TRACE_MAX_MB=8 TRACE_SEG_MB=2 \
+            timeout 10 ./bin/matrixlab.instr || true
+          bytes=$(du -sb traces | cut -f1)
+          echo "wrote $bytes bytes under an 8 MB budget"
+          test "$bytes" -lt 33554432
+          uv run callsight analyze traces/ --exe bin/matrixlab.instr \
+            | grep -q "budget"
+      - name: summary mode writes a bounded report
+        run: |
+          cd tests/matrixlab
+          rm -rf traces
+          TRACE_ENABLE=1 TRACE_MODE=summary timeout 10 ./bin/matrixlab.instr \
+            || true
+          bytes=$(du -sb traces | cut -f1)
+          echo "summary mode wrote $bytes bytes"
+          test "$bytes" -lt 1048576
+          uv run callsight analyze traces/ --exe bin/matrixlab.instr \
+            | grep -q "mode=summary"
+      - name: export formats
+        run: |
+          cd tests/matrixlab
+          rm -rf traces
+          TRACE_ENABLE=1 TRACE_MAX=200000 timeout 5 ./bin/matrixlab.instr || true
+          uv run callsight analyze traces/ --exe bin/matrixlab.instr \
+            --format folded | head -5
+          uv run callsight analyze traces/ --exe bin/matrixlab.instr \
+            --format chrome > /tmp/chrome.json
+          uv run python -c "import json;d=json.load(open('/tmp/chrome.json'));\
+assert d['traceEvents'], 'no timeline events';print(len(d['traceEvents']),'spans')"
+          uv run callsight analyze traces/ --exe bin/matrixlab.instr \
+            --format callers | head -5
 
   smoke-cmake:
     runs-on: ubuntu-latest
@@ -45,6 +143,9 @@ jobs:
             "-DCALLSIGHT_COMMAND=python3;$PWD/../../src/callsight/cli.py" \
             -B build-instr
           cmake --build build-instr
+          # Default link is PIE: the load bias in the trace header is what
+          # makes that resolve, and this is the job that proves it.
+          file build-instr/demo | grep -q "pie executable"
           TRACE_ENABLE=1 TRACE_MAX=200000 ./build-instr/demo
           uv run callsight analyze traces/ --exe build-instr/demo \
             | tee analyze.out
@@ -52,6 +153,7 @@ jobs:
           # selection proof: only fib may appear (mix is excluded)
           grep -q "fib" analyze.out
           ! grep -q " mix " analyze.out
+          ! grep -q "did not resolve" analyze.out
 
   smoke-stream:
     runs-on: ubuntu-latest
@@ -71,7 +173,8 @@ jobs:
 
           # PYTHONUNBUFFERED so the readiness line reaches the log promptly.
           PYTHONUNBUFFERED=1 uv run --extra stream callsight serve \
-            --port 9001 --out /tmp/stream_traces >/tmp/serve.log 2>&1 &
+            --port 9001 --out /tmp/stream_traces --seg-mb 8 \
+            >/tmp/serve.log 2>&1 &
 
           # Wait for the listener rather than guessing how long it takes.
           for _ in $(seq 1 60); do
@@ -99,6 +202,10 @@ jobs:
             --exe bin/matrixlab.instr | tee analyze.out
           grep -q "unmatched_exits=0" analyze.out
           grep -qE "events=[1-9]" analyze.out
+          # The handshake must carry the device's clock: without it the
+          # server records raw cycle counts as if they were nanoseconds.
+          uv run python ../../.github/scripts/check_stream_headers.py \
+            /tmp/stream_traces
       - name: Stop background stream processes and clean shm
         if: always()
         run: |

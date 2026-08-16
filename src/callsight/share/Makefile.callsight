@@ -8,7 +8,7 @@
 #     instrument: CFLAGS = $(CFLAGS_INSTRUMENT)
 #     instrument: $(BINDIR)/$(TARGET).instr
 #     $(BINDIR)/$(TARGET).instr: $(OBJS) $(TRACE_OBJ) | $(BINDIR)
-#         $(CC) $(CFLAGS_INSTRUMENT) -no-pie -o $@ $(OBJS) $(TRACE_OBJ) $(LDFLAGS)
+#         $(CC) $(CFLAGS_INSTRUMENT) -o $@ $(OBJS) $(TRACE_OBJ) $(LDFLAGS)
 #
 # Expected from the including Makefile:
 #   SRCS            source file list (as passed to the compiler)
@@ -19,8 +19,11 @@
 #   CALLSIGHT_CONFIG  selection config                    (default: ./trace.config)
 #   CALLSIGHT         command that prints the flags       (default: callsight)
 #
-# -no-pie is required at link time: it keeps runtime addresses equal to link
-# addresses so `callsight analyze` can feed them to addr2line directly.
+# -no-pie is NOT required. The runtime records the PIE load bias in every
+# trace header and `callsight analyze` subtracts it, so a position-independent
+# executable resolves symbols correctly. Link however you ship: forcing
+# -no-pie would have you profiling a binary built differently from the real
+# one.
 
 CALLSIGHT_DIR     ?= callsight
 CALLSIGHT_CONFIG  ?= trace.config

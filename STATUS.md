@@ -2,42 +2,54 @@
 
 **callsight** adds compile-time entry/exit tracing to any C/C++ project
 (Make/CMake, Linux) with zero source edits: selective coverage from one
-`trace.config`, a lean per-thread runtime, hotspot analysis, flame-graph
-export, a web UI, and remote streaming from constrained devices over
-ZSTD-compressed TCP. Selective coverage requires **GCC** — the
-`-finstrument-functions-exclude-*` flags it relies on are GCC-only ([LLVM
-#15627](https://github.com/llvm/llvm-project/issues/15627)); Clang can only
-instrument everything, and callsight says so before the build starts.
+`trace.config`, a lean per-thread runtime, exact call counts and latency
+percentiles, flame-graph and Perfetto export, a web UI, and remote streaming
+from constrained devices over ZSTD-compressed TCP. Capture is bounded by
+default and says so in the report when a bound is reached. Selective coverage
+requires **GCC** — the `-finstrument-functions-exclude-*` flags it relies on
+are GCC-only ([LLVM #15627](https://github.com/llvm/llvm-project/issues/15627));
+Clang can only instrument everything, and callsight says so before the build
+starts.
 
 ## Where we are
 
 | component | state | evidence |
 |---|---|---|
-| Core engine (`flags`, `analyze`) | ✅ done | 130 unit tests (incl. full `analyze.py` coverage), run on Python 3.9 and 3.13 |
-| Streaming analyzer | ✅ done | events matched as they are read; 1M-event trace: 190 MB → 14 MB peak RSS, identical report |
-| Flame graph / JSON export (`analyze --format folded\|json`) | ✅ done | collapsed stacks for flamegraph.pl & speedscope; folded self-time total matches the text report exactly |
+| Core engine (`flags`, `analyze`) | ✅ done | 186 unit tests, run on Python 3.9 and 3.13 |
+| Bounded capture (`TRACE_MAX_MB`, `TRACE_FULL`, free-space floor) | ✅ done | budget of 4 MB holds under a run that would write ~66 MB; `wrap` keeps the tail; every stop reason reported in-band |
+| Summary mode (`TRACE_MODE=summary`) | ✅ done | constant memory and constant output: 2.8 KB for a run 10× longer than one writing 244 MB of events |
+| Latency percentiles (p50/p90/p99 + exact min/max) | ✅ done | log-scale histogram per function in both modes; bracket a known 2 ms sleep in the runtime suite |
+| Trace format v2 (PIE bias, clock anchors, markers) | ✅ done | `header_size`-gated so later versions stay readable; v1 files still analyze |
+| PIE support (no `-no-pie` requirement) | ✅ done | cmake_demo builds a PIE by default and resolves every symbol in CI |
+| Fast clock (invariant TSC / `cntvct_el0`) | ✅ done | 12.0 ns/hook vs 16.2 for `clock_gettime`, measured by `tests/bench/run_bench.py` |
+| Runtime correctness (tid reuse, fork, write errors, races) | ✅ done | 20 end-to-end runtime tests + a ThreadSanitizer leg over the threaded paths |
+| Export formats (`folded`, `json`, `chrome`, `callers`) | ✅ done | folded total matches the text report exactly; chrome opens in ui.perfetto.dev |
+| Regression gate (`callsight diff --fail-over`) | ✅ done | exact call counts make the comparison real; exits non-zero over budget |
+| Ergonomics (`callsight run`, `callsight doctor`) | ✅ done | one command from binary to report; doctor checks toolchain, config, disk |
+| Streaming analyzer | ✅ done | events matched as they are read; 1M-event trace: 190 MB → 14 MB peak RSS |
 | Toolchain check (GCC-only exclude flags) | ✅ done | compiler detected from `$CC` / `CMAKE_C_COMPILER`; a selective config under clang fails with an explanation, not a driver error |
-| CLI (`init` / `scan` / `select` / `flags` / `analyze`) | ✅ done | adoption drill on a foreign copy of matrixlab: build → run → analyze clean |
-| Function/task-level selection (`include-func` + call graph) | ✅ done | `include-func workload_sort` e2e: only the 31-function subtree traced, `unmatched_exits=0` |
+| Function/task-level selection (`include-func` + call graph) | ✅ done | `include-func workload_sort` e2e: only the 31-function subtree traced |
 | Thread-level selection (`TRACE_THREADS`) | ✅ done | `TRACE_THREADS='sort-*'` e2e: 3 of 26 threads traced |
-| Make integration | ✅ done | matrixlab e2e: `unmatched_exits=0` |
-| CMake integration | ✅ done | `tests/cmake_demo` e2e: `unmatched_exits=0`; normal builds carry zero hooks |
-| Web UI (`callsight ui`) | ✅ done | full API-driven cycle (browse → config → build → run → report) on both fixtures |
-| UI Config Builder (folder scan → checkbox selection → `trace.config`) | ✅ done | ctags/regex symbol enumeration, dry-run preview, apply-to-disk; smoke-tested on matrixlab (35 files / 315 functions) |
-| Bundled ctags (`callsight provision`, UI auto-download) | ✅ done | static universal-ctags 6.2.1 release assets (x86_64/aarch64), sha256-verified install into `~/.callsight/bin`; regex fallback when unavailable |
-| Remote streaming (`TRACE_SHM` → `trace_stream` → zstd/TCP → `callsight serve`) | ✅ done | 500k events / 26 threads over localhost, `unmatched_exits=0`; drop-counting verified under ring overflow |
-| Docs site (GitHub Pages) | ✅ done | hand-built static site in `docs/` (landing, getting started, configuration, analysis, web UI, streaming, architecture, reference); link/anchor checker gates every deploy |
-| CI | ✅ done | unit + 3 end-to-end smoke jobs on every push |
+| Make / CMake integration | ✅ done | both fixtures e2e: `unmatched_exits=0`; normal builds carry zero hooks |
+| Web UI (`callsight ui`) | ✅ done | full API-driven cycle, percentiles and capture notices in the table, interactive flame graph with zoom |
+| UI Config Builder | ✅ done | ctags/regex symbol enumeration, dry-run preview, apply-to-disk |
+| Bundled ctags (`callsight provision`) | ✅ done | static universal-ctags 6.2.1 (x86_64/aarch64), sha256-verified |
+| Remote streaming (`TRACE_SHM` → `trace_stream` → zstd/TCP → `callsight serve`) | ✅ done | 400k events / 26 threads, `unmatched_exits=0`; handshake carries the device clock; server output rotates and is capped |
+| Docs site (GitHub Pages) | ✅ done | hand-built static site in `docs/`; link/anchor checker gates every deploy |
+| CI | ✅ done | unit + UI + runtime + TSan + 3 end-to-end smoke jobs on every push |
 | Release pipeline | ✅ wired | tag `v*` → GitHub Release + PyPI (trusted publishing) |
-| First PyPI release | ✅ done | v0.1.0 on PyPI via trusted publishing; releases are tag-driven (`git tag vX.Y.Z && git push --tags`) |
 
 ## Roadmap
 
 **Next up**
+- **Hardware counters per function** — `perf_event_open` in per-thread mode read
+  via `rdpmc` from the mmap page: exact instructions retired and cache misses
+  *per call*. This is the one remaining thing `perf` does that callsight
+  cannot, and it needs its own pass (PMU multiplexing,
+  `perf_event_paranoid` handling, arch fallbacks).
 - Live stream view in the web UI (watch a remote device's trace arrive)
-- Render the folded export as a flame graph inside the web UI (the CLI
-  already emits it; the UI still shows tables only)
-- `-finstrument-functions-after-inlining` opt-in for Clang builds
+- Pure-Python ELF/DWARF symbolizer (optional extra) to drop the binutils
+  dependency for cross-compiled targets entirely
 
 **Explored, on deck** (see the
 [compiler-mechanism survey](https://harshithsunku.github.io/callsight/architecture.html#mechanisms))
@@ -45,18 +57,23 @@ instrument everything, and callsight says so before the build starts.
   (XRay-style sled patching) — the design reference for "trace a live
   production process for 5 seconds"
 - `-fsanitize-coverage` as a low-overhead edge-level backend
+- `-finstrument-functions-after-inlining` opt-in
 
 **Deliberate non-goals**
 - GCC plugin API (version-locked), gcov-style coverage counting,
   eBPF/uprobes (root requirements)
+- Kernel time, off-CPU time, and whole-system profiling — that is `perf`'s
+  ground and callsight does not try to take it
 
 ## Verify it yourself
 
 ```sh
 python3 -m unittest discover -s tests          # unit tests
+python3 tests/runtime/test_runtime.py          # the C runtime, end to end
+python3 tests/bench/run_bench.py               # the overhead numbers above
+
 cd tests/matrixlab && make clean && make instrument
-TRACE_ENABLE=1 TRACE_MAX=1000000 timeout 5 ./bin/matrixlab.instr
-uv run callsight analyze traces/ --top 20      # expect unmatched_exits=0
+callsight run --timeout 5 -- ./bin/matrixlab.instr    # expect unmatched_exits=0
 ```
 
 Streaming and CMake smoke procedures:
@@ -66,5 +83,6 @@ Streaming and CMake smoke procedures:
 
 - Docs: https://harshithsunku.github.io/callsight/
 - Repo: https://github.com/harshithsunku/callsight
+- Capture limits: [capture](https://harshithsunku.github.io/callsight/capture.html)
 - Compiler-mechanism survey: [architecture — compiler mechanisms](https://harshithsunku.github.io/callsight/architecture.html#mechanisms)
 - Contributing/conventions: [AGENTS.md](https://github.com/harshithsunku/callsight/blob/main/AGENTS.md)

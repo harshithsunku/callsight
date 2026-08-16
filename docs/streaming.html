@@ -27,6 +27,7 @@
     <div class="topnav-links">
       <a href="getting-started.html">Getting started</a>
       <a href="configuration.html">Configuration</a>
+      <a href="capture.html">Capture</a>
       <a href="analysis.html">Analysis</a>
       <a href="web-ui.html">Web UI</a>
       <a href="streaming.html" class="active">Streaming</a>
@@ -155,7 +156,8 @@
 <h2 id="quickstart">Quick start</h2>
 <pre><code><span class="c"># analysis host (needs the stream extra):</span>
 <span class="p">$</span> uv tool install 'callsight[stream]'
-<span class="p">$</span> callsight serve                    <span class="c"># 0.0.0.0:9001, writes traces/</span></code></pre>
+<span class="p">$</span> callsight serve                    <span class="c"># 0.0.0.0:9001, writes traces/</span>
+<span class="p">$</span> callsight serve --max-mb 8192      <span class="c"># raise the per-connection budget</span></code></pre>
 <pre><code><span class="c"># adopt with streaming support — copies trace_stream.c + the vendored zstd:</span>
 <span class="p">$</span> callsight init --stream /path/to/project</code></pre>
 <pre><code><span class="c"># on the device:</span>
@@ -167,7 +169,15 @@
 <div class="note">
   <strong>Keep the binary.</strong> Symbols are resolved on the host from the same
   instrumented binary you shipped to the device — <code>--exe</code> must point at it, and
-  <code>addr2line</code> must match its architecture.
+  <code>addr2line</code> must match its architecture. For a cross-compiled target that
+  means the toolchain's own copy:
+  <code>--addr2line aarch64-linux-gnu-addr2line</code>.
+</div>
+<div class="note">
+  <strong>The host has limits too.</strong> <code>serve</code> rotates and caps its output
+  per connection (4&nbsp;GB by default). A device streaming for an hour must not fill the
+  machine you are analyzing on either — the same reasoning as the
+  <a href="capture.html">on-device budget</a>.
 </div>
 
 <h2 id="protocol">Ring layout and wire protocol</h2>
@@ -177,29 +187,43 @@ layout change). All integers little-endian.</p>
 
 <h3 id="ring">Ring header</h3>
 <p><code>trace_shm_header_t</code>, followed by <code>capacity</code> bytes of event
-storage. The header is 64 bytes.</p>
+storage. The header is 96 bytes.</p>
 <div class="table-scroll">
 <table class="ref">
   <thead><tr><th>Field</th><th>Type</th><th>Meaning</th></tr></thead>
   <tbody>
     <tr><td><code>magic</code></td><td><code>char[8]</code></td><td><code>TKSHM</code></td></tr>
-    <tr><td><code>version</code></td><td><code>u32</code></td><td><code>TRACE_SHM_VERSION</code> (1)</td></tr>
+    <tr><td><code>version</code></td><td><code>u32</code></td><td><code>TRACE_SHM_VERSION</code> (2)</td></tr>
     <tr><td><code>capacity</code></td><td><code>u32</code></td><td>Ring bytes after the header</td></tr>
     <tr><td><code>writers</code></td><td><code>u32</code></td><td>Tracer processes attached</td></tr>
     <tr><td><code>lock</code></td><td><code>u32</code></td><td>Spinlock: 0 = free</td></tr>
     <tr><td><code>head</code></td><td><code>u64</code></td><td>Monotonic write offset (bytes)</td></tr>
     <tr><td><code>tail</code></td><td><code>u64</code></td><td>Monotonic read offset (bytes)</td></tr>
     <tr><td><code>dropped</code></td><td><code>u64</code></td><td>Events dropped because the ring was full</td></tr>
-    <tr><td><code>_pad</code></td><td><code>u8[16]</code></td><td>Reserved</td></tr>
+    <tr><td><code>flags</code></td><td><code>u32</code></td><td>Whether timestamps are raw ticks; written by the tracer</td></tr>
+    <tr><td><code>load_bias</code></td><td><code>u64</code></td><td>PIE relocation offset of the traced binary</td></tr>
+    <tr><td><code>tick_hz</code>, <code>t0_ticks</code>, <code>t0_ns</code></td><td><code>u64</code></td><td>Clock calibration</td></tr>
+    <tr><td><code>hook_ns</code></td><td><code>u64</code></td><td>Measured per-hook cost</td></tr>
   </tbody>
 </table>
 </div>
 <p><code>head</code> and <code>tail</code> are monotonic byte counters; bytes in use is
 <code>head - tail</code>.</p>
+<p>The lower half of the header is written once by the traced process, read by the drain
+client, and forwarded to the server. Without it the server would have to guess: raw cycle
+counts and nanoseconds are indistinguishable once they reach the wire, and guessing wrong
+produces a trace that looks perfectly normal and is wrong by the clock ratio. The client
+therefore waits for a tracer to attach before sending its handshake — it starts first, and
+the values it needs do not exist yet.</p>
+<p>The spinlock is bounded and yields. A tracer killed inside its critical section leaves
+the lock held forever, and on a single-core device an unbounded spin would prevent the
+holder from ever being scheduled to release it. A participant that gives up drops its batch,
+because the ring's whole contract is that profiling never stalls the workload.</p>
 
 <h3 id="wire">Wire protocol</h3>
-<p>Client → server over TCP: an 8-byte <code>TKSTREAM</code> magic, <code>u32 version</code>
-and <code>u32 event_size</code>, then a sequence of chunks. Each chunk is
+<p>Client → server over TCP: a 64-byte handshake — <code>TKSTREAM</code> magic,
+<code>u32 version</code>, <code>u32 event_size</code>, then the same clock calibration and
+load bias the ring carries — followed by a sequence of chunks. Each chunk is
 <code>u32 type, u32 raw_len, u32 zstd_len</code> followed by <code>zstd_len</code> bytes of
 ZSTD-compressed payload.</p>
 <div class="table-scroll">
@@ -246,6 +270,7 @@ cross-compiles like any other C file:</p>
     <a href="./">Home</a>
     <a href="getting-started.html">Getting started</a>
     <a href="configuration.html">Configuration</a>
+    <a href="capture.html">Capture</a>
     <a href="analysis.html">Analysis</a>
     <a href="web-ui.html">Web UI</a>
     <a href="architecture.html">Architecture</a>

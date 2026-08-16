@@ -27,6 +27,7 @@
     <div class="topnav-links">
       <a href="getting-started.html">Getting started</a>
       <a href="configuration.html">Configuration</a>
+      <a href="capture.html">Capture</a>
       <a href="analysis.html">Analysis</a>
       <a href="web-ui.html">Web UI</a>
       <a href="streaming.html">Streaming</a>
@@ -160,7 +161,35 @@ themselves.</p>
     thread exit (via a pthread key destructor), and at process exit.</li>
   <li><strong>Reentrancy guard</strong> per thread, so a hook can never recurse through
     the code it calls.</li>
+  <li><strong>Process-wide counters are charged per flush</strong> — once per 8192 events,
+    not once per event. A shared atomic touched by every hook would put every thread on one
+    cache line exactly when tracing is heaviest.</li>
+  <li><strong>Raw descriptors, not stdio.</strong> The runtime already batches, so stdio
+    would add a second buffer — one that <code>fork()</code> duplicates into the child.</li>
+  <li><strong>Fork-aware.</strong> A <code>pthread_atfork</code> child handler drops the
+    inherited descriptors and buffers and starts a fresh capture under the new pid;
+    otherwise parent and child interleave into the same file.</li>
 </ul>
+
+<h3 id="clock">The clock</h3>
+<p>Timestamping is the dominant cost in a hook, so <code>TRACE_CLOCK=auto</code> reads the
+invariant cycle counter directly — <code>rdtsc</code> on x86-64, <code>cntvct_el0</code> on
+aarch64 — which is what the vDSO itself reads, minus the scaling work. On this project's
+benchmark that is <strong>12 ns per hook against 16 ns</strong> for
+<code>clock_gettime</code>.</p>
+<p>x86-64 only takes that path when CPUID reports an <em>invariant</em> TSC; anything else
+ticks at a rate that changes with frequency scaling and would silently distort every
+duration. When it is unavailable the runtime falls back to <code>CLOCK_MONOTONIC</code> and
+says so.</p>
+<p>Ticks are converted to nanoseconds offline. The runtime records an anchor pair
+(counter, <code>CLOCK_MONOTONIC</code>) at startup and writes a second one as the last
+record at exit, so the analyzer derives the tick rate across the <em>whole run</em> rather
+than from a startup calibration window. The header also carries a coarse rate as a fallback
+for a process that was killed before it could write the closing anchor.</p>
+<p>The old default, <code>CLOCK_MONOTONIC_RAW</code>, is no longer used automatically: it
+is absent from the vDSO on older ARM kernels, where it costs a full syscall per event —
+precisely on the embedded targets that can least afford it. It remains available as
+<code>TRACE_CLOCK=raw</code>.</p>
 
 <h3 id="event">The event record</h3>
 <p>32 bytes, fixed layout, little-endian — the same on disk and on the wire.</p>
@@ -168,18 +197,31 @@ themselves.</p>
 <table class="ref">
   <thead><tr><th>Field</th><th>Type</th><th>Meaning</th></tr></thead>
   <tbody>
-    <tr><td><code>ts_ns</code></td><td><code>u64</code></td><td><code>CLOCK_MONOTONIC_RAW</code> nanoseconds</td></tr>
-    <tr><td><code>func_addr</code></td><td><code>u64</code></td><td>Address of the entered/exited function</td></tr>
-    <tr><td><code>caller_addr</code></td><td><code>u64</code></td><td>Return address in the caller</td></tr>
+    <tr><td><code>ts_ns</code></td><td><code>u64</code></td><td>Nanoseconds, or raw counter ticks when the header says so</td></tr>
+    <tr><td><code>func_addr</code></td><td><code>u64</code></td><td>Address of the entered/exited function (or a marker code)</td></tr>
+    <tr><td><code>caller_addr</code></td><td><code>u64</code></td><td>Return address in the caller — the exact call site (or a marker payload)</td></tr>
     <tr><td><code>tid</code></td><td><code>u32</code></td><td>Kernel thread id</td></tr>
-    <tr><td><code>kind</code></td><td><code>u8</code></td><td>0 = enter, 1 = exit</td></tr>
+    <tr><td><code>kind</code></td><td><code>u8</code></td><td>0 = enter, 1 = exit, 2 = marker</td></tr>
     <tr><td><code>_pad</code></td><td><code>u8[3]</code></td><td>Padding to 32 bytes</td></tr>
   </tbody>
 </table>
 </div>
-<p>Each trace file starts with a 16-byte header: an <code>MLTRACE</code> magic, a format
-version, and the event size — so a mismatched or truncated file is detected and skipped
-rather than misread.</p>
+<p>Each trace file starts with an 80-byte version 2 header. Its first 16 bytes are laid out
+exactly as version 1 — magic, version, event size — so any reader can identify the file
+before it knows the rest, and a <code>header_size</code> field tells readers where the
+events begin instead of making them assume. That is what lets a later version add fields
+without breaking this one, and why version 1 traces still analyze today. The header also
+carries the PIE load bias, the clock calibration, and the runtime's own measured per-hook
+cost.</p>
+
+<h3 id="markers">Markers</h3>
+<p>Kind 2 is a note from the runtime to the analyzer, carrying a reason code and a payload
+in the two address fields. It is how a capture that ended early says so — budget reached,
+disk full, write failed, segments rotated away — instead of simply looking short. Markers
+cost nothing to carry, travel over the streaming protocol like any other record, and a
+reader that does not recognize one skips it.</p>
+<p>Treating an unknown kind as an exit would corrupt the entire match, so this is one of
+the few places where the format demands that readers be strict.</p>
 
 <h2 id="analyzer">3 · The analyzer</h2>
 <p>Analysis is a single streaming pass. Events are read in blocks and matched as they
@@ -352,7 +394,9 @@ equivalent, and distribution is a nightmare. A deliberate non-goal.</p>
     <li><a href="#selection">1 · Selection</a></li>
     <li class="sub"><a href="#callgraph">Static call graph</a></li>
     <li><a href="#runtime">2 · Hook runtime</a></li>
+    <li class="sub"><a href="#clock">The clock</a></li>
     <li class="sub"><a href="#event">The event record</a></li>
+    <li class="sub"><a href="#markers">Markers</a></li>
     <li><a href="#analyzer">3 · The analyzer</a></li>
     <li><a href="#mechanisms">Compiler mechanisms</a></li>
     <li class="sub"><a href="#m-instrument">-finstrument-functions</a></li>
@@ -368,6 +412,7 @@ equivalent, and distribution is a nightmare. A deliberate non-goal.</p>
     <a href="./">Home</a>
     <a href="getting-started.html">Getting started</a>
     <a href="configuration.html">Configuration</a>
+    <a href="capture.html">Capture</a>
     <a href="analysis.html">Analysis</a>
     <a href="web-ui.html">Web UI</a>
     <a href="streaming.html">Streaming</a>

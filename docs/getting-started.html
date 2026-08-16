@@ -27,6 +27,7 @@
     <div class="topnav-links">
       <a href="getting-started.html" class="active">Getting started</a>
       <a href="configuration.html">Configuration</a>
+      <a href="capture.html">Capture</a>
       <a href="analysis.html">Analysis</a>
       <a href="web-ui.html">Web UI</a>
       <a href="streaming.html">Streaming</a>
@@ -107,7 +108,7 @@ include $(CALLSIGHT_DIR)/Makefile.callsight
 instrument: CFLAGS = $(CFLAGS_INSTRUMENT)
 instrument: $(BINDIR)/$(TARGET).instr
 $(BINDIR)/$(TARGET).instr: $(OBJS) $(TRACE_OBJ) | $(BINDIR)
-	$(CC) $(CFLAGS_INSTRUMENT) -no-pie -o $@ $(OBJS) $(TRACE_OBJ) $(LDFLAGS)</code></pre>
+	$(CC) $(CFLAGS_INSTRUMENT) -o $@ $(OBJS) $(TRACE_OBJ) $(LDFLAGS)</code></pre>
     <p>The fragment expects <code>SRCS</code>, <code>BUILDDIR</code>,
     <code>BINDIR</code>, <code>TARGET</code>, <code>CC</code>,
     <code>CFLAGS_SYMBOLS</code> and <code>LDFLAGS</code>, and defines
@@ -128,10 +129,11 @@ callsight_instrument(&lt;your-target&gt;)</code></pre>
 <a href="reference.html#integrations">reference page</a>.</p>
 
 <div class="note">
-  <strong>Why -no-pie?</strong> It keeps runtime addresses equal to link addresses, so the
-  analyzer can hand them straight to <code>addr2line</code>. Both integrations add it for
-  you. If you link the instrumented binary yourself and skip it, <code>analyze</code> will
-  warn that nothing resolved.
+  <strong>Link the way you ship.</strong> Earlier versions required <code>-no-pie</code> so
+  that recorded addresses matched link addresses. The runtime now records the load bias in
+  every trace header and the analyzer subtracts it, so position-independent executables
+  work unchanged — which matters, because forcing <code>-no-pie</code> meant profiling a
+  binary built differently from the real one.
 </div>
 
 <h2 id="build">Build the instrumented profile</h2>
@@ -140,35 +142,56 @@ callsight_instrument(&lt;your-target&gt;)</code></pre>
 (<code>bin/yourapp.instr</code> by convention with the Make integration), so a normal
 <code>make</code> still produces an uninstrumented build with zero hooks in it.</p>
 
-<h2 id="collect">Collect a trace</h2>
+<h2 id="collect">Run it</h2>
 <p>The hooks are compiled in but <strong>inert</strong> until you ask for a trace, so an
-instrumented binary is safe to run normally.</p>
-<pre><code><span class="p">$</span> TRACE_ENABLE=1 TRACE_MAX=1000000 ./bin/yourapp.instr</code></pre>
+instrumented binary is safe to run normally. One command runs it with tracing on and
+reports on what it recorded:</p>
+<pre><code><span class="p">$</span> callsight run --timeout 10 --top 20 -- ./bin/yourapp.instr</code></pre>
+<p><code>run</code> clears trace files from any earlier run first — reporting on a stale
+<code>traces/</code> directory silently mixes two runs into one set of numbers, which is
+the easiest way to draw a wrong conclusion here.</p>
+
+<p>Or drive it by hand, which is what <code>run</code> does for you:</p>
+<pre><code><span class="p">$</span> TRACE_ENABLE=1 ./bin/yourapp.instr
+<span class="p">$</span> callsight analyze traces/ --exe ./bin/yourapp.instr --top 20</code></pre>
 <ul>
   <li><code>TRACE_ENABLE=1</code> turns collection on. Without it, every hook is one
     predictable branch and returns.</li>
-  <li><code>TRACE_MAX</code> caps total events. <strong>Always set one for long
-    runs</strong> — a call-heavy program can produce millions of events per second.</li>
   <li><code>TRACE_DIR</code> changes the output directory (default
     <code>./traces</code>).</li>
   <li><code>TRACE_THREADS="worker-*"</code> records only threads whose name matches — a
     runtime filter, no rebuild needed.</li>
+  <li>Capture stops at 512 MB by default and says so in the report. Long runs, flight
+    recorder mode and constant-size summaries are on the
+    <a href="capture.html">capture limits</a> page.</li>
 </ul>
-<p>Each thread writes <code>traces/trace.&lt;pid&gt;.&lt;tid&gt;.bin</code>. A clean exit
-flushes everything; a killed process loses each thread's buffered tail.</p>
+<p>Each thread writes <code>traces/trace.&lt;pid&gt;.&lt;tid&gt;.&lt;seq&gt;.bin</code>. A
+clean exit flushes everything; a killed process loses each thread's buffered tail.</p>
 
-<h2 id="analyze">Analyze</h2>
-<pre><code><span class="p">$</span> callsight analyze traces/ --exe ./bin/yourapp.instr --top 20</code></pre>
-<pre><code>events=<span class="n">1000000</span> threads=<span class="n">26</span> functions=<span class="n">139</span> span=48.7ms <span class="s">unmatched_exits=0</span> unclosed_enters=136
+<h2 id="analyze">Read the report</h2>
+<pre><code>events=<span class="n">850059</span> threads=<span class="n">24</span> functions=<span class="n">84</span> span=6.6ms <span class="s">unmatched_exits=0</span> unclosed_enters=127
 
 == TOP BY SELF TIME ==
-     calls      incl_ms      self_ms       max_ms  function (first location)
-       272      529.382      529.382        9.983  timer_sleep_us (src/utils/timer.c:38)
-    127048       52.470       52.470        6.643  qs_swap (src/sort/quicksort.c:5)
-     57284      366.418       35.370        5.738  fft_recursive (src/signal/fft.c:63)</code></pre>
+     calls      incl_ms      self_ms       p50       p99       max  function (first location)
+        12       13.170       13.170  983.04us    1.97ms    1.97ms  timer_sleep_us (src/utils/timer.c:38)
+     16111       11.098        6.518      71ns    3.84us    1.59ms  qs_partition (src/sort/quicksort.c:23)
+    358383        4.738        4.738       8ns      14ns  352.74us  qs_swap (src/sort/quicksort.c:5)</code></pre>
 <p><code>unmatched_exits=0</code> means every exit was matched to an enter — a clean
-trace. Read the columns, export a flame graph, and interpret the summary line on the
-<a href="analysis.html">analysis page</a>.</p>
+trace. Every call is timed, so <code>p50</code>, <code>p99</code> and <code>max</code> are
+measurements rather than estimates: <code>qs_swap</code> above normally finishes in 8&nbsp;ns,
+and once took 352&nbsp;µs. Read the columns, export a flame graph, and interpret the
+summary line on the <a href="analysis.html">analysis page</a>.</p>
+
+<h2 id="doctor">If something looks wrong</h2>
+<p><code>callsight doctor</code> checks the pieces this depends on — the compiler and
+whether it is GCC, <code>addr2line</code>, that your config selects something, and that
+the trace directory is writable with room to spare:</p>
+<pre><code><span class="p">$</span> callsight doctor
+[ok  ] compiler: cc is GCC — selective instrumentation available
+[ok  ] addr2line: /usr/bin/addr2line
+[ok  ] trace.config: 35 sources, 34 instrumented, 1 excluded
+[ok  ] free space: 28187 MB available
+[ok  ] -finstrument-functions: accepted by the compiler</code></pre>
 
 <h2 id="narrow">Narrow the selection</h2>
 <p>Your first wide run is a survey. Sort it by <code>calls</code>, find the chatty leaf
@@ -209,8 +232,9 @@ as the end-to-end fixture — the traces in these docs come from it.</p>
     <li><a href="#adopt">Adopt a project</a></li>
     <li class="sub"><a href="#wire">Wire it into your build</a></li>
     <li><a href="#build">Build</a></li>
-    <li><a href="#collect">Collect a trace</a></li>
-    <li><a href="#analyze">Analyze</a></li>
+    <li><a href="#collect">Run it</a></li>
+    <li><a href="#analyze">Read the report</a></li>
+    <li><a href="#doctor">If something looks wrong</a></li>
     <li><a href="#narrow">Narrow the selection</a></li>
     <li><a href="#try">Try it without a project</a></li>
   </ul>
@@ -221,6 +245,7 @@ as the end-to-end fixture — the traces in these docs come from it.</p>
   <div class="foot-row">
     <a href="./">Home</a>
     <a href="configuration.html">Configuration</a>
+    <a href="capture.html">Capture</a>
     <a href="analysis.html">Analysis</a>
     <a href="web-ui.html">Web UI</a>
     <a href="streaming.html">Streaming</a>

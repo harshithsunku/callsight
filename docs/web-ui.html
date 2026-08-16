@@ -30,6 +30,7 @@
     <div class="topnav-links">
       <a href="getting-started.html">Getting started</a>
       <a href="configuration.html">Configuration</a>
+      <a href="capture.html">Capture</a>
       <a href="analysis.html">Analysis</a>
       <a href="web-ui.html" class="active">Web UI</a>
       <a href="streaming.html">Streaming</a>
@@ -83,9 +84,13 @@ CLI.</p>
     (<code>make instrument</code> or the CMake flow) with the full log captured, then run
     the binary with <code>TRACE_ENABLE=1</code>, a <code>TRACE_MAX</code> cap and a
     timeout.</li>
-  <li><strong>Report</strong> — the analyzer result as a sortable table: calls, inclusive,
-    self and max time, with the summary line turning green on
-    <code>unmatched_exits=0</code>.</li>
+  <li><strong>Report</strong> — the analyzer result as a sortable table: calls, inclusive
+    and self time, plus the per-call <code>p50</code>, <code>p99</code> and <code>max</code>,
+    with the summary line turning green on <code>unmatched_exits=0</code>. Anything that cut
+    the capture short is called out above the table.</li>
+  <li><strong>Flame graph</strong> — the same collapsed stacks the CLI exports, rendered
+    in the browser. Each frame is as wide as the time spent inside it; click one to zoom
+    into that subtree and click it again to zoom back out.</li>
 </ol>
 
 <div class="shot">
@@ -170,6 +175,7 @@ CLI.</p>
     <a href="./">Home</a>
     <a href="getting-started.html">Getting started</a>
     <a href="configuration.html">Configuration</a>
+    <a href="capture.html">Capture</a>
     <a href="analysis.html">Analysis</a>
     <a href="streaming.html">Streaming</a>
     <a href="architecture.html">Architecture</a>

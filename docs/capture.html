@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Capture limits — callsight</title>
+<meta name="description" content="How callsight bounds what it records: an on-disk budget, stop and wrap policies, a free-space floor, and summary mode for runs of any length.">
+<meta property="og:title" content="Capture limits — callsight">
+<meta property="og:description" content="Tracing must never fill the machine it is profiling. Budgets, rotation, flight-recorder mode, and constant-memory summaries.">
+<meta name="theme-color" content="#0d1016">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav-inner">
+    <a class="brand" href="./">
+      <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="10.5" cy="10.5" r="6.5" stroke="#22d3ee" stroke-width="2"/>
+        <path d="M15.6 15.6 L21 21" stroke="#818cf8" stroke-width="2.4" stroke-linecap="round"/>
+        <path d="M7.5 11.5 l2 2.4 3.5-5.4" stroke="#22d3ee" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg><span>call<span class="a">sight</span></span></a>
+    <div class="topnav-links">
+      <a href="getting-started.html">Getting started</a>
+      <a href="configuration.html">Configuration</a>
+      <a href="capture.html" class="active">Capture</a>
+      <a href="analysis.html">Analysis</a>
+      <a href="web-ui.html">Web UI</a>
+      <a href="streaming.html">Streaming</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="reference.html">Reference</a>
+    </div>
+    <div class="topnav-right">
+      <a class="btn btn-ghost" href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener">GitHub</a>
+      <button class="theme-btn" id="theme-toggle" aria-label="Toggle theme" title="Toggle light/dark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="4"></circle>
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+        </svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+
+<header class="page-head">
+  <div class="container">
+    <span class="eyebrow">Capture</span>
+    <h1>Capture limits</h1>
+    <p>A profiler that can fill the machine it is profiling is not a profiling tool.
+    Every mode below has a bound, the bounds have defaults, and when one is reached the
+    report says so instead of quietly ending early.</p>
+  </div>
+</header>
+
+<div class="layout-with-toc">
+<main class="prose">
+
+<h2 id="why">The problem with unbounded tracing</h2>
+<p>Event tracing writes 32 bytes per function entry and 32 per exit. A call-heavy program
+reaches millions of events per second, so a few seconds of tracing is hundreds of
+megabytes and a few minutes is more disk than most embedded targets have at all. Left
+unbounded that is not a slow leak — it is a device that stops working, in the middle of
+the investigation you were running.</p>
+
+<p>So capture is bounded by default. You can turn the bound off, but you have to say so.</p>
+
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th>Variable</th><th>Default</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td class="nowrap"><code>TRACE_MAX_MB</code></td><td><code>512</code></td><td>Total on-disk budget for the process. <code>0</code> means unlimited</td></tr>
+    <tr><td class="nowrap"><code>TRACE_FULL</code></td><td><code>stop</code></td><td>What happens at the budget: <code>stop</code> keeps the beginning, <code>wrap</code> keeps the end</td></tr>
+    <tr><td class="nowrap"><code>TRACE_SEG_MB</code></td><td><code>32</code></td><td>Segment size, which is the rotation granularity. Under <code>wrap</code> this is an upper bound — see below</td></tr>
+    <tr><td class="nowrap"><code>TRACE_MIN_FREE_MB</code></td><td><code>64</code></td><td>Stop if the filesystem falls below this much free space. <code>0</code> disables the check</td></tr>
+    <tr><td class="nowrap"><code>TRACE_MAX</code></td><td><code>0</code></td><td>Global event cap, as an upper bound</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="policies">Keep the start, or keep the end</h2>
+<p>The two policies answer different questions.</p>
+
+<p><strong><code>stop</code></strong> (the default) records until the budget is gone and
+then stops. Use it when the interesting behaviour is at the beginning — startup cost,
+initialization order, the first request.</p>
+
+<pre><code>TRACE_ENABLE=1 TRACE_MAX_MB=256 ./bin/app.instr</code></pre>
+
+<p><strong><code>wrap</code></strong> turns the trace directory into a flight recorder: old
+segments are discarded as new ones are written, so what survives is the most recent
+<code>TRACE_MAX_MB</code> of execution. Use it for the question instrumentation answers
+better than anything else — <em>what was this program doing in the moments before it
+hung?</em></p>
+
+<pre><code>TRACE_ENABLE=1 TRACE_MAX_MB=256 TRACE_FULL=wrap ./bin/app.instr
+# ... reproduce the hang, then kill it and analyze what is left</code></pre>
+
+<div class="note">
+  <strong>Wrap discards enter events whose exits are still to come</strong>, so the report
+  will show unmatched exits. That is expected, not corruption, and
+  <code>callsight analyze</code> labels it that way rather than leaving you to wonder.
+</div>
+
+<h2 id="segments">Segments</h2>
+<p>Each thread writes <code>trace.&lt;pid&gt;.&lt;tid&gt;.&lt;seq&gt;.bin</code>, rotating
+to a new sequence number every <code>TRACE_SEG_MB</code>. Segments are what make rotation
+possible at all — <code>wrap</code> works by unlinking a whole segment — and they keep any
+single file small enough to copy off a device.</p>
+
+<p>Under <code>wrap</code>, <code>TRACE_SEG_MB</code> is an upper bound rather than the
+size actually used. A thread can never discard the segment it is currently writing, so the
+steady state holds up to two segments per thread; with a couple of dozen threads a fixed
+32&nbsp;MB segment would overshoot a small budget by an order of magnitude. The runtime
+therefore sizes segments against the budget and the number of participating threads. A
+floor of 64&nbsp;KB per segment remains, so a very small budget spread over many threads
+still cannot be honoured exactly — roughly <code>threads × 128 KB</code> is the practical
+minimum.</p>
+
+<p>Files are never appended to. The kernel recycles thread ids, so a long-running pool
+eventually hands a new thread an id that an earlier one used; appending there would put a
+second file header in the middle of an existing capture and shift every later record off
+the 32-byte grid. The sequence number makes that unrepresentable.</p>
+
+<p>Budget accounting happens once per flush — every 8192 events — not once per event. A
+shared counter touched by every thread on every hook would serialize the whole program on
+one cache line exactly when tracing is heaviest.</p>
+
+<h2 id="summary">Summary mode: runs of any length</h2>
+<p>If what you want is <em>which functions cost the most</em> rather than a timeline, you
+do not need the events at all. <code>TRACE_MODE=summary</code> aggregates inside the
+process — call counts, inclusive and self time, min, max and a latency histogram per
+function, over a per-thread shadow stack — and writes only totals when the thread exits.</p>
+
+<pre><code>TRACE_ENABLE=1 TRACE_MODE=summary ./bin/app.instr</code></pre>
+
+<p>Memory is proportional to the number of instrumented functions, not to the number of
+calls, and so is the output. On the project's own benchmark, a run that writes
+<strong>244 MB</strong> of events in the default mode writes <strong>2.8 KB</strong> in
+summary mode — and writes the same 2.8 KB when the run is ten times longer:</p>
+
+<pre><code>$ python3 tests/bench/run_bench.py
+mode                                   total  vs plain   ns/hook   on disk
+plain build (no hooks)                  0.9ms      1.00         -         -
+instrumented, tracing off               5.9ms      6.73       0.6         -
+TRACE_CLOCK=tsc (default here)         97.1ms    111.70      12.0   244.1MB
+TRACE_CLOCK=mono                      130.6ms    150.22      16.2   244.1MB
+TRACE_MODE=summary                     65.1ms     74.84       8.0     2.8KB
+
+summary mode on disk: 2.8KB for 200,000 iterations, 2.8KB for 2,000,000 — constant</code></pre>
+
+<p>Summary mode is also the cheaper hot path: there is no event record to write and no I/O
+to do. What you give up is anything that needs an ordering — flame graphs, the Perfetto
+timeline, and hot call sites all need the call paths that only event mode records.</p>
+
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th></th><th>events (default)</th><th>summary</th><th>streaming</th></tr></thead>
+  <tbody>
+    <tr><td>On-disk growth</td><td>bounded by <code>TRACE_MAX_MB</code></td><td>constant</td><td>none on the device</td></tr>
+    <tr><td>Run length</td><td>until the budget</td><td>unbounded</td><td>unbounded</td></tr>
+    <tr><td>Counts &amp; times</td><td>exact</td><td>exact</td><td>exact, minus ring drops</td></tr>
+    <tr><td>Percentiles</td><td>yes</td><td>yes</td><td>yes</td></tr>
+    <tr><td>Flame graph / timeline</td><td>yes</td><td>no</td><td>yes</td></tr>
+    <tr><td>Needs</td><td>disk</td><td>nothing</td><td>a network path to a server</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="space">The free-space floor</h2>
+<p>The budget bounds what callsight writes; the floor bounds what it leaves behind for
+everyone else. Every 4 MB per thread the runtime checks the filesystem holding the trace
+directory and stops if free space has fallen below <code>TRACE_MIN_FREE_MB</code>. The
+check is a <code>statvfs</code> syscall roughly once per 130,000 events, which is not
+measurable next to the events themselves.</p>
+
+<p>Write failures are checked too. If a write fails part way — a full disk, a quota, a
+size limit — the partial record is trimmed off so the file stays well-formed, the capture
+stops, and the reason goes to stderr and into the trace. The old behaviour was to ignore
+the return value, which produced a report that looked clean and was simply missing
+everything after the failure.</p>
+
+<h2 id="notices">Nothing ends silently</h2>
+<p>Whenever capture ends for a reason other than the program finishing, the runtime writes
+a <strong>marker</strong> into the trace itself, and <code>callsight analyze</code> prints
+it above the tables:</p>
+
+<pre><code>events=850059 threads=24 functions=84 span=6.6ms unmatched_exits=0 unclosed_enters=127
+! capture stopped: the 512 MB on-disk budget was reached (TRACE_MAX_MB); everything
+  after that point is missing</code></pre>
+
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th>Marker</th><th>Means</th></tr></thead>
+  <tbody>
+    <tr><td class="nowrap"><code>budget</code></td><td><code>TRACE_MAX_MB</code> was reached under the <code>stop</code> policy</td></tr>
+    <tr><td class="nowrap"><code>wrap</code></td><td>Segments were discarded; the report covers the end of the run</td></tr>
+    <tr><td class="nowrap"><code>nospace</code></td><td>Free space fell below <code>TRACE_MIN_FREE_MB</code></td></tr>
+    <tr><td class="nowrap"><code>write_error</code></td><td>A write failed; the payload is the errno</td></tr>
+    <tr><td class="nowrap"><code>max_events</code></td><td>The <code>TRACE_MAX</code> event cap was reached</td></tr>
+    <tr><td class="nowrap"><code>truncated</code></td><td>A segment ends mid-record: the process was killed, or a write failed part way</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>Markers are ordinary 32-byte records with their own event kind, so they cost nothing to
+carry and any reader that does not understand one skips it. They travel over the streaming
+protocol as well.</p>
+
+<h2 id="server">The server side</h2>
+<p>The same reasoning applies to the analysis host. <code>callsight serve</code> bounds and
+rotates its output per connection, because a device that streams for an hour should not
+fill the machine you are analyzing on either.</p>
+
+<pre><code>callsight serve --max-mb 4096 --seg-mb 256</code></pre>
+
+<h2 id="choosing">Choosing a bound</h2>
+<ul>
+  <li><strong>Leave the default</strong> unless you have a reason. 512 MB is around 16
+    million events — enough to see structure, small enough to be harmless.</li>
+  <li><strong>On a device, set it far lower</strong> and consider
+    <a href="streaming.html">streaming</a> instead, which writes nothing locally at all.</li>
+  <li><strong>Chasing a hang or a rare stall?</strong> <code>TRACE_FULL=wrap</code> with a
+    budget you can afford to keep resident.</li>
+  <li><strong>Profiling a long run?</strong> <code>TRACE_MODE=summary</code>. Hours of
+    execution, kilobytes of output, exact counts.</li>
+  <li><strong>Cutting volume at the source beats cutting it afterwards.</strong> The
+    <a href="configuration.html">config file</a> decides which functions emit hooks at all,
+    and excluded code costs nothing at runtime.</li>
+</ul>
+
+<div class="next-links">
+  <a class="next-link" href="configuration.html"><strong>Configuration &rarr;</strong><span>Reduce the events at the source: choose what gets hooks in the first place.</span></a>
+  <a class="next-link" href="analysis.html"><strong>Analysis &rarr;</strong><span>Read the report, the percentiles, and the export formats.</span></a>
+  <a class="next-link" href="streaming.html"><strong>Streaming &rarr;</strong><span>Keep nothing on the device at all.</span></a>
+</div>
+
+</main>
+
+<aside class="toc">
+  <div class="toc-label">On this page</div>
+  <ul>
+    <li><a href="#why">The problem</a></li>
+    <li><a href="#policies">Stop or wrap</a></li>
+    <li><a href="#segments">Segments</a></li>
+    <li><a href="#summary">Summary mode</a></li>
+    <li><a href="#space">Free-space floor</a></li>
+    <li><a href="#notices">Nothing ends silently</a></li>
+    <li><a href="#server">The server side</a></li>
+    <li><a href="#choosing">Choosing a bound</a></li>
+  </ul>
+</aside>
+</div>
+
+<footer>
+  <div class="foot-row">
+    <a href="./">Home</a>
+    <a href="getting-started.html">Getting started</a>
+    <a href="configuration.html">Configuration</a>
+    <a href="reference.html">Reference</a>
+    <a href="analysis.html">Analysis</a>
+    <a href="web-ui.html">Web UI</a>
+    <a href="streaming.html">Streaming</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener">GitHub</a>
+  </div>
+  <div>MIT licensed · built for people who profile C and C++ on Linux</div>
+</footer>
+
+<script src="assets/docs.js"></script>
+</body>
+</html>

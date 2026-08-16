@@ -42,6 +42,19 @@
   pre { background:var(--bg); border:1px solid var(--border); border-radius:5px;
         padding:10px; overflow:auto; max-height:280px;
         font:12px/1.4 ui-monospace, monospace; white-space:pre-wrap; }
+  .note { background:var(--bg); border:1px solid var(--border);
+          border-left:3px solid var(--err); border-radius:4px;
+          padding:7px 10px; margin-bottom:8px; font-size:12.5px; }
+  /* Flame graph: each frame is a bar plus a nested row of its callees, so
+     width falls out of the layout rather than needing measurement. */
+  #flame { margin-bottom:14px; font:11px ui-monospace, monospace; }
+  .fl { display:inline-block; vertical-align:top; overflow:hidden; }
+  .flbar { height:17px; margin:1px 1px 0 0; border-radius:2px; cursor:pointer;
+           line-height:17px; padding:0 4px; color:#08111d; font-weight:600;
+           white-space:nowrap; }
+  .flbar:hover { filter:brightness(1.25); }
+  .flbar span { pointer-events:none; }
+  .flkids { display:flex; }
   table { border-collapse:collapse; width:100%;
           font:12.5px ui-monospace, monospace; }
   th, td { text-align:right; padding:4px 10px;
@@ -131,7 +144,15 @@
   <h2>4 · Report</h2>
   <div class="row">
     <button onclick="analyzeReport()">Analyze traces</button>
+    <button onclick="loadFlame()">Flame graph</button>
     <span id="summary" class="dim"></span>
+  </div>
+  <div id="notices"></div>
+  <div id="flamewrap" style="display:none">
+    <div class="row" style="margin-bottom:6px">
+      <span class="dim" id="flamehint">click a frame to zoom · click the root to reset</span>
+    </div>
+    <div id="flame"></div>
   </div>
   <div id="report"></div>
 </section>
@@ -341,20 +362,40 @@ async function runTarget() {
   } catch (e) { setStatus(e.message, "err"); }
 }
 
+/* Per-call durations run from nanoseconds to seconds; a fixed unit turns
+   most of them into 0.000. */
+function dur(ns) {
+  if (ns >= 1e9) return (ns/1e9).toFixed(2) + "s";
+  if (ns >= 1e6) return (ns/1e6).toFixed(2) + "ms";
+  if (ns >= 1e3) return (ns/1e3).toFixed(2) + "us";
+  return Math.round(ns) + "ns";
+}
+
 let rows = [], sortKey = "self_ms";
 function renderTable() {
   const cols = [["calls","calls"],["incl_ms","incl ms"],["self_ms","self ms"],
-                ["max_ms","max ms"]];
+                ["p50_ns","p50"],["p99_ns","p99"],["max_ns","max"]];
   let html = "<table><tr>" + cols.map(([k,label]) =>
       `<th class="${sortKey===k?"sel":""}" onclick="sortKey='${k}';renderTable()">${label}</th>`).join("")
       + '<th class="l">function</th></tr>';
   for (const r of [...rows].sort((a,b) => b[sortKey]-a[sortKey]).slice(0, 50)) {
     html += `<tr><td>${r.calls}</td><td>${r.incl_ms.toFixed(3)}</td>` +
-            `<td>${r.self_ms.toFixed(3)}</td><td>${r.max_ms.toFixed(3)}</td>` +
+            `<td>${r.self_ms.toFixed(3)}</td>` +
+            `<td>${dur(r.p50_ns||0)}</td><td>${dur(r.p99_ns||0)}</td>` +
+            `<td>${dur(r.max_ns||0)}</td>` +
             `<td class="l">${esc(r.function)} <span class="dim">${esc(r.location)}</span></td></tr>`;
   }
   html += "</table>";
   document.getElementById("report").innerHTML = html;
+}
+
+/* A capture that was cut short says so in-band; surfacing it here matters
+   more than the table, because it changes what the table means. */
+function renderNotices(notices) {
+  const el = document.getElementById("notices");
+  if (!notices || !notices.length) { el.innerHTML = ""; return; }
+  el.innerHTML = notices.map(n =>
+    `<div class="note">! ${esc(n)}</div>`).join("");
 }
 
 async function analyzeReport() {
@@ -366,10 +407,97 @@ async function analyzeReport() {
     document.getElementById("summary").textContent =
       `events=${d.events} threads=${d.threads} functions=${d.functions} ` +
       `span=${d.span_ms.toFixed(1)}ms unmatched_exits=${d.unmatched_exits} ` +
-      `unclosed_enters=${d.unclosed_enters}`;
+      `unclosed_enters=${d.unclosed_enters}` +
+      (d.mode === "summary" ? " mode=summary" : "");
+    renderNotices(d.notices);
     renderTable();
     setStatus(d.unmatched_exits === 0 ? "clean trace" : "trace has unmatched exits",
               d.unmatched_exits === 0 ? "ok" : "err");
+  } catch (e) { setStatus(e.message, "err"); }
+}
+
+/* ---- Flame graph ----
+   Folded stacks in, nested <div> rows out. Width is self+descendant time,
+   so a frame is exactly as wide as the time spent inside it. */
+let flameRoot = null, flameFocus = null;
+
+function buildFlameTree(folded) {
+  const root = {name: "(all)", value: 0, children: new Map()};
+  for (const [path, ns] of folded) {
+    let node = root;
+    root.value += ns;
+    for (const part of path.split(";")) {
+      let child = node.children.get(part);
+      if (!child) { child = {name: part, value: 0, children: new Map()};
+                    node.children.set(part, child); }
+      child.value += ns;
+      node = child;
+    }
+  }
+  return root;
+}
+
+/* Stable hue per name so the same function keeps its colour between
+   renders and between zoom levels. */
+function flameHue(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
+  return ((h % 360) + 360) % 360;
+}
+
+function renderFlameNode(node, total, depth) {
+  const pct = total > 0 ? (node.value / total) * 100 : 0;
+  if (pct < 0.08) return "";           // below one pixel of a wide screen
+  const kids = [...node.children.values()].sort((a, b) => b.value - a.value);
+  const hue = flameHue(node.name);
+  const title = `${node.name} — ${dur(node.value)} (${pct.toFixed(2)}%)`;
+  let html = `<div class="fl" style="width:${pct}%" title="${esc(title)}">` +
+    `<div class="flbar" style="background:hsl(${hue} 62% 46%)" ` +
+    `onclick="zoomFlame('${esc(node.name).replace(/'/g, "\\'")}')">` +
+    `<span>${esc(node.name)}</span></div><div class="flkids">`;
+  for (const k of kids) html += renderFlameNode(k, node.value, depth + 1);
+  return html + "</div></div>";
+}
+
+function findFlameNode(node, name) {
+  if (node.name === name) return node;
+  for (const c of node.children.values()) {
+    const hit = findFlameNode(c, name);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function zoomFlame(name) {
+  if (!flameRoot) return;
+  flameFocus = (flameFocus && flameFocus.name === name) || name === "(all)"
+    ? flameRoot : (findFlameNode(flameRoot, name) || flameRoot);
+  drawFlame();
+}
+
+function drawFlame() {
+  const node = flameFocus || flameRoot;
+  document.getElementById("flame").innerHTML =
+    renderFlameNode(node, node.value, 0);
+  document.getElementById("flamehint").textContent =
+    node === flameRoot
+      ? "click a frame to zoom · click it again to reset"
+      : `zoomed into ${node.name} (${dur(node.value)}) · click it again to reset`;
+}
+
+async function loadFlame() {
+  const binary = document.getElementById("binary").value;
+  try {
+    setStatus("building flame graph…");
+    const d = await api("/api/flame?path=" + encodeURIComponent(project)
+                        + "&binary=" + encodeURIComponent(binary));
+    if (!d.folded.length) { setStatus("no call paths in this trace", "err"); return; }
+    flameRoot = buildFlameTree(d.folded);
+    flameFocus = flameRoot;
+    document.getElementById("flamewrap").style.display = "";
+    renderNotices(d.notices);
+    drawFlame();
+    setStatus(`flame graph · ${d.folded.length} call paths`, "ok");
   } catch (e) { setStatus(e.message, "err"); }
 }
 </script>

@@ -14,8 +14,10 @@
  * Usage: trace_stream <shm-name> <server-host> <port>
  *   e.g. trace_stream /callsight0 192.168.1.10 9001
  *
- * Exits once a tracer attached and detached (writers 1 -> 0) and the ring
- * is fully drained. If no tracer ever attaches, it waits — Ctrl-C to stop.
+ * Waits for a tracer to attach before sending its handshake (the ring's
+ * clock calibration comes from the traced process), then exits once that
+ * tracer has detached (writers 1 -> 0) and the ring is fully drained. If no
+ * tracer ever attaches, it waits — Ctrl-C to stop.
  */
 
 #include <arpa/inet.h>
@@ -100,15 +102,33 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* stream header: magic, version, event record size */
-    struct {
-        char     magic[8];
-        uint32_t version;
-        uint32_t event_size;
-    } sheader;
+    /*
+     * Wait for a tracer before describing the stream.
+     *
+     * The ring's clock calibration and load bias are written by the traced
+     * process, which normally starts after this client. Sending the
+     * handshake immediately would forward zeros, and the server would then
+     * record raw cycle counts as if they were nanoseconds — a trace that
+     * looks fine and is wrong by the width of the clock ratio.
+     */
+    while (h->writers == 0 && h->head == h->tail)
+        usleep(1000);
+    __sync_synchronize();  /* pair with the tracer's writers increment */
+
+    /* Handshake: identify the stream and forward how the tracer's
+     * timestamps and addresses are to be read. The server cannot infer
+     * that — raw cycle counts and nanoseconds look identical on the wire. */
+    trace_stream_header_t sheader;
+    memset(&sheader, 0, sizeof(sheader));
     memcpy(sheader.magic, TRACE_STREAM_MAGIC, sizeof(sheader.magic));
     sheader.version = TRACE_STREAM_VERSION;
     sheader.event_size = (uint32_t)sizeof(trace_event_t);
+    sheader.flags = h->flags;
+    sheader.load_bias = h->load_bias;
+    sheader.tick_hz = h->tick_hz;
+    sheader.t0_ticks = h->t0_ticks;
+    sheader.t0_ns = h->t0_ns;
+    sheader.hook_ns = h->hook_ns;
     if (send_all(fd, &sheader, sizeof(sheader)) != 0) {
         fprintf(stderr, "trace_stream: server closed during handshake\n");
         return 1;
@@ -127,14 +147,15 @@ int main(int argc, char **argv) {
     uint64_t total_sent = 0;
 
     for (;;) {
-        uint64_t avail;
-        trace_shm_lock(h);
-        avail = h->head - h->tail;
-        if (avail > CHUNK_BYTES)
-            avail = CHUNK_BYTES;
-        if (avail > 0)
-            h->tail = trace_shm_get(h, raw, avail);
-        trace_shm_unlock(h);
+        uint64_t avail = 0;
+        if (trace_shm_lock(h)) {
+            avail = h->head - h->tail;
+            if (avail > CHUNK_BYTES)
+                avail = CHUNK_BYTES;
+            if (avail > 0)
+                h->tail = trace_shm_get(h, raw, avail);
+            trace_shm_unlock(h);
+        }
 
         if (avail > 0) {
             if (send_chunk(fd, cctx, TRACE_STREAM_CHUNK_EVENTS,

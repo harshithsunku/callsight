@@ -20,8 +20,14 @@
  * must never stall the workload. A single spinlock serializes writers and
  * the reader; critical sections are short memcpys of buffered batches.
  *
+ * Both the ring header and the stream handshake carry the tracer's clock
+ * calibration and PIE load bias. Without them the server would have to
+ * guess: raw cycle counts written by a device using the fast clock are
+ * indistinguishable from nanoseconds once they reach the wire.
+ *
  * Wire protocol (client -> server, TCP):
- *   magic[8] "TKSTREAM", u32 version, u32 event_size
+ *   magic[8] "TKSTREAM", u32 version, u32 event_size, u32 flags, u32 pad,
+ *   u64 load_bias, u64 tick_hz, u64 t0_ticks, u64 t0_ns, u64 hook_ns
  *   then chunks: u32 type, u32 raw_len, u32 zstd_len, payload
  *     type 0: events  (payload decompresses to raw_len bytes of events)
  *     type 1: notice  (payload decompresses to a u64 dropped-event count)
@@ -30,6 +36,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <sched.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -38,11 +45,11 @@
 #include <unistd.h>
 
 #define TRACE_SHM_MAGIC      "TKSHM\0\0\0"
-#define TRACE_SHM_VERSION    1u
+#define TRACE_SHM_VERSION    2u
 #define TRACE_SHM_DEF_SIZE   (16u * 1024u * 1024u)
 
 #define TRACE_STREAM_MAGIC   "TKSTREAM"
-#define TRACE_STREAM_VERSION 1u
+#define TRACE_STREAM_VERSION 2u
 
 #define TRACE_STREAM_CHUNK_EVENTS 0u
 #define TRACE_STREAM_CHUNK_NOTICE 1u
@@ -56,18 +63,62 @@ typedef struct {
     volatile uint64_t   head;        /* monotonic write offset (bytes) */
     volatile uint64_t   tail;        /* monotonic read offset (bytes) */
     volatile uint64_t   dropped;     /* events dropped (ring was full) */
-    uint8_t             _pad[16];
+    /* Written once by the tracer, read by the drain client, forwarded to
+     * the server: how to interpret the timestamps and addresses above. */
+    uint32_t            flags;       /* TRACE_HF_* from trace.h */
+    uint32_t            _pad0;
+    uint64_t            load_bias;
+    uint64_t            tick_hz;
+    uint64_t            t0_ticks;
+    uint64_t            t0_ns;
+    uint64_t            hook_ns;
 } trace_shm_header_t;
+
+/* Stream handshake, sent once per connection before any chunk. */
+typedef struct {
+    char     magic[8];   /* TRACE_STREAM_MAGIC */
+    uint32_t version;    /* TRACE_STREAM_VERSION */
+    uint32_t event_size;
+    uint32_t flags;
+    uint32_t _pad0;
+    uint64_t load_bias;
+    uint64_t tick_hz;
+    uint64_t t0_ticks;
+    uint64_t t0_ns;
+    uint64_t hook_ns;
+} trace_stream_header_t;
 
 /* Total mapping size for a ring of `capacity` bytes. */
 static inline uint64_t trace_shm_total(uint32_t capacity) {
     return (uint64_t)sizeof(trace_shm_header_t) + capacity;
 }
 
-/* Byte-level spinlock: short batch copies only, never held across I/O. */
-static inline void trace_shm_lock(trace_shm_header_t *h) {
-    while (__sync_lock_test_and_set(&h->lock, 1))
-        ;
+/*
+ * Byte-level spinlock: short batch copies only, never held across I/O.
+ *
+ * The spin is bounded and yields, for two reasons. A tracer killed inside
+ * its critical section leaves the lock held forever, and an unbounded spin
+ * would wedge every other participant behind a process that no longer
+ * exists. And on a single-core device, spinning without yielding prevents
+ * the holder from ever being scheduled to release it. Callers that give up
+ * drop their batch — the ring's whole contract is that profiling never
+ * stalls the workload.
+ */
+#define TRACE_SHM_SPINS 4096u
+#define TRACE_SHM_YIELDS 1024u
+
+static inline int trace_shm_lock(trace_shm_header_t *h) {
+    unsigned yields = 0;
+    for (;;) {
+        unsigned spins = TRACE_SHM_SPINS;
+        while (spins--) {
+            if (!__sync_lock_test_and_set(&h->lock, 1))
+                return 1;
+        }
+        if (++yields > TRACE_SHM_YIELDS)
+            return 0;
+        sched_yield();
+    }
 }
 static inline void trace_shm_unlock(trace_shm_header_t *h) {
     __sync_lock_release(&h->lock);
