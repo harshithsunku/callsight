@@ -27,7 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from callsight import analyze  # noqa: E402
+from callsight import analyze, flags  # noqa: E402
 
 RUNTIME = ROOT / "src" / "callsight" / "runtime"
 PROBE_SRC = Path(__file__).resolve().parent / "runtime_probe.c"
@@ -410,5 +410,130 @@ class TestInertWhenDisabled(RuntimeCase):
         self.assertEqual(list(self.dir.glob("*")), [])
 
 
+def counters_work():
+    """Whether this machine's PMU is genuinely usable, right now.
+
+    Deliberately asked per test run rather than cached at import: on a shared
+    host whether an event reaches hardware can differ between processes, and
+    an answer from ten minutes ago is not evidence about this one.
+    """
+    from callsight import counters
+    return counters.probe()["available"]
+
+
+class TestHardwareCounters(RuntimeCase):
+    """Counters have two correct behaviours and CI usually sees the second.
+
+    On a machine with a working PMU the values must be exact and the guard
+    rail must fire. On a machine without one — every container, including
+    GitHub's runners — the run must be *ordinary*: no counter columns, no
+    zeros, and a reason on stderr. That second case is the one this suite can
+    always prove, and it is the one that would otherwise ship broken.
+    """
+
+    def write_map(self, names, events=("instructions",), min_ns="auto"):
+        from callsight import counters, elf
+        syms = elf.functions(self.probe)
+        missing = [n for n in names if n not in syms]
+        self.assertEqual(missing, [], f"probe has no symbol for {missing}")
+        sel = counters.Selection(
+            events=[(e,) + flags.parse_counter_event(e) for e in events],
+            entries=sorted((syms[n][0], n) for n in names),
+            min_ns=min_ns, unresolved=[], not_instrumented=[], warnings=[])
+        return counters.write_map(counters.map_path(self.dir), sel,
+                                  self.probe)
+
+    def test_absent_counters_produce_an_ordinary_report(self):
+        """The failure this guards: reporting zero instructions for every
+        function, which looks exactly like a program that does nothing."""
+        if counters_work():
+            self.skipTest("this machine has working counters")
+        self.write_map(["probe_leaf", "probe_mid"])
+        proc = self.run_probe("spin", 200, env={"TRACE_MODE": "summary"})
+        self.assertIn("not usable here", proc.stderr)
+
+        data = analyze.collect(self.dir, self.probe)
+        self.assertEqual(data["counter_events"], [])
+        for row in data["rows"]:
+            self.assertNotIn("counters", row,
+                             "no counters means no columns, not zeroed ones")
+        self.assertGreater(len(data["rows"]), 1)
+
+    def test_no_map_means_no_counters_and_no_complaints(self):
+        proc = self.run_probe("spin", 200, env={"TRACE_MODE": "summary"})
+        self.assertNotIn("counter", proc.stderr.lower())
+        self.assertEqual(analyze.collect(self.dir, self.probe)
+                         ["counter_events"], [])
+
+    def test_counters_disabled_explicitly(self):
+        self.write_map(["probe_leaf"])
+        proc = self.run_probe("spin", 200, env={"TRACE_MODE": "summary",
+                                                "TRACE_COUNTERS": "none"})
+        self.assertNotIn("not usable here", proc.stderr)
+        self.assertEqual(analyze.collect(self.dir, self.probe)
+                         ["counter_events"], [])
+
+    def test_exact_and_repeatable_counts(self):
+        """The claim the feature exists to make: the same work reports the
+        same number, which wall time never does."""
+        if not counters_work():
+            self.skipTest("no usable hardware counters here")
+        seen = []
+        for _ in range(3):
+            for f in self.trace_files():
+                f.unlink()
+            self.write_map(["probe_leaf", "probe_top"], min_ns="0")
+            self.run_probe("spin", 300, env={"TRACE_MODE": "summary"})
+            data = analyze.collect(self.dir, self.probe)
+            row = next(r for r in data["rows"]
+                       if r["function"] == "probe_leaf")
+            self.assertIn("instructions", row["counters"])
+            seen.append(round(row["counters"]["instructions"]["per_call"], 1))
+        self.assertEqual(len(set(seen)), 1,
+                         f"instructions per call drifted across runs: {seen}")
+        self.assertGreater(seen[0], 0)
+
+    def test_inclusive_counts_contain_the_children(self):
+        if not counters_work():
+            self.skipTest("no usable hardware counters here")
+        self.write_map(["probe_leaf", "probe_mid"], min_ns="0")
+        self.run_probe("spin", 200, env={"TRACE_MODE": "summary"})
+        rows = {r["function"]: r for r in
+                analyze.collect(self.dir, self.probe)["rows"]}
+        leaf = rows["probe_leaf"]["counters"]["instructions"]
+        mid = rows["probe_mid"]["counters"]["instructions"]
+        # probe_mid calls probe_leaf eight times per call.
+        self.assertGreater(mid["per_call"], 8 * leaf["per_call"])
+        self.assertLess(mid["self"], mid["total"])
+
+    def test_functions_too_short_are_demoted_and_named(self):
+        """A function far shorter than a counter read measures the
+        instrument. The runtime stops counting it and says which."""
+        if not counters_work():
+            self.skipTest("no usable hardware counters here")
+        self.write_map(["probe_leaf"], min_ns="auto")
+        self.run_probe("spin", 4000, env={"TRACE_MODE": "summary"})
+        data = analyze.collect(self.dir, self.probe)
+        leaf = next(r for r in data["rows"] if r["function"] == "probe_leaf")
+        counted = leaf.get("counters", {}).get("instructions", {}).get("calls", 0)
+        self.assertLess(counted, leaf["calls"],
+                        "a sub-microsecond function should stop being counted")
+        self.assertTrue(any("too short" in n for n in data["notices"]),
+                        data["notices"])
+
+    def test_event_mode_counter_records_do_not_break_matching(self):
+        """Counter records ride in the event stream; a reader that mistook
+        one for an exit would corrupt every match after it."""
+        if not counters_work():
+            self.skipTest("no usable hardware counters here")
+        self.write_map(["probe_leaf", "probe_mid"], min_ns="0")
+        self.run_probe("spin", 200)
+        data = analyze.collect(self.dir, self.probe)
+        self.assertEqual(data["unmatched_exits"], 0)
+        row = next(r for r in data["rows"] if r["function"] == "probe_leaf")
+        self.assertGreater(row["counters"]["instructions"]["per_call"], 0)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+

@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hardware counters — callsight</title>
+<meta name="description" content="Exact instructions retired, cache misses and branch misses per function: how callsight counts them, how it refuses to report a number that is not real, and how to choose what to count.">
+<meta property="og:title" content="Hardware counters — callsight">
+<meta property="og:description" content="Wall time moves five-fold between runs. Instructions retired do not. That is what makes a regression gate you can trust.">
+<meta name="theme-color" content="#0d1016">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav-inner">
+    <a class="brand" href="./">
+      <svg class="mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="10.5" cy="10.5" r="6.5" stroke="#22d3ee" stroke-width="2"/>
+        <path d="M15.6 15.6 L21 21" stroke="#818cf8" stroke-width="2.4" stroke-linecap="round"/>
+        <path d="M7.5 11.5 l2 2.4 3.5-5.4" stroke="#22d3ee" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg><span>call<span class="a">sight</span></span></a>
+    <div class="topnav-links">
+      <a href="getting-started.html">Getting started</a>
+      <a href="configuration.html">Configuration</a>
+      <a href="capture.html">Capture</a>
+      <a href="counters.html" class="active">Counters</a>
+      <a href="analysis.html">Analysis</a>
+      <a href="web-ui.html">Web UI</a>
+      <a href="streaming.html">Streaming</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="reference.html">Reference</a>
+    </div>
+    <div class="topnav-right">
+      <a class="btn btn-ghost" href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener">GitHub</a>
+      <button class="theme-btn" id="theme-toggle" aria-label="Toggle theme" title="Toggle light/dark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="4"></circle>
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+        </svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+
+<header class="page-head">
+  <div class="container">
+    <span class="eyebrow">Counters</span>
+    <h1>Hardware counters</h1>
+    <p>Instructions retired, cache misses and branch misses, counted exactly for the
+    functions you name. Unlike wall time the numbers repeat, which is what turns
+    <code>callsight diff</code> into a gate you can set at 1% instead of eyeball at 10%.</p>
+  </div>
+</header>
+
+<div class="layout-with-toc">
+<main class="prose">
+
+<h2 id="why">Why counters</h2>
+<p>Wall-clock time is what everyone measures and it is the least repeatable thing a
+computer does. Here is the same function, in the same binary, on the same idle machine,
+five consecutive runs — instructions retired against self time:</p>
+
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th>Run</th><th>instructions / call</th><th>self time</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td><code>223.0</code></td><td>4.61 ms</td></tr>
+    <tr><td>2</td><td><code>223.0</code></td><td>4.62 ms</td></tr>
+    <tr><td>3</td><td><code>223.0</code></td><td><strong>22.49 ms</strong></td></tr>
+    <tr><td>4</td><td><code>223.0</code></td><td>4.60 ms</td></tr>
+    <tr><td>5</td><td><code>223.0</code></td><td>4.58 ms</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>The instruction count is identical every time. The wall time varies five-fold, because
+run 3 met the scheduler. A CI gate on the second column has to be set so loose it catches
+nothing; a gate on the first can be set at 1%.</p>
+
+<p>That is the whole case for this feature. Everything below exists to keep that column
+trustworthy.</p>
+
+<h2 id="quickstart">Quick start</h2>
+<p>Three lines in <code>trace.config</code>:</p>
+
+<pre><code>counter instructions
+counter-func handle_request 1
+counter-min auto</code></pre>
+
+<pre><code><span class="p">$</span> callsight run -- ./bin/app.instr</code></pre>
+
+<p><code>run</code> resolves those names against the binary you just built, writes the
+address map the runtime reads, and reports:</p>
+
+<pre><code>== HARDWARE COUNTERS (instructions) ==
+     calls   instructions/call  function
+       200             4,471.3  handle_request
+      1600               223.0  parse_headers</code></pre>
+
+<h2 id="selecting">Choosing what to count</h2>
+<p>Four directives, deliberately shaped like the instrumentation ones next to them.</p>
+
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th>Directive</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td class="nowrap"><code>counter &lt;events&gt;</code></td><td>Which events to count, comma-separated. At most three</td></tr>
+    <tr><td class="nowrap"><code>counter-func &lt;name&gt; [depth]</code></td><td>Count this function, and optionally its call subtree — the same walk <code>include-func</code> uses</td></tr>
+    <tr><td class="nowrap"><code>counter-file &lt;pattern&gt;</code></td><td>Count every instrumented function defined in matching files</td></tr>
+    <tr><td class="nowrap"><code>counter-min auto|&lt;ns&gt;|0</code></td><td>Skip functions shorter than this. <code>auto</code> derives it from the measured read cost; <code>0</code> disables the guard</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>Events: <code>instructions</code>, <code>cycles</code>, <code>cache-references</code>,
+<code>cache-misses</code>, <code>branch-instructions</code>, <code>branch-misses</code>,
+<code>bus-cycles</code>, <code>stalled-cycles-frontend</code>,
+<code>stalled-cycles-backend</code>, <code>ref-cycles</code>, or a raw PMU code as
+<code>rNNNN</code>.</p>
+
+<div class="note">
+  <strong>A fourth event is refused, not accepted.</strong> A PMU has a handful of
+  general-purpose registers. Ask for more events than it has and the kernel time-slices
+  them and scales the results — and a scaled count is an estimate, which is the one thing
+  this feature exists not to produce. Record two runs instead.
+</div>
+
+<p><strong>Only instrumented functions can be counted.</strong> A function excluded at
+compile time emits no hooks at all, so there is nowhere to read a counter. Naming one is
+reported rather than silently ignored:</p>
+
+<pre><code>warning: 1 selected function(s) carry no instrumentation hooks, so they
+cannot be counted — widen the include/exclude rules first: crc32_update</code></pre>
+
+<h3>Names, addresses, and no rebuild</h3>
+<p>The hooks are handed a function's <em>address</em>; your config names <em>functions</em>.
+callsight bridges that by reading the built binary's symbol table and writing a small text
+map that the runtime loads at startup:</p>
+
+<pre><code>CALLSIGHT-COUNTERS 1
+build-id 3f2ae1c9...
+min auto
+event instructions 0 1
+0000000000401b40 checksum
+0000000000401c90 transform</code></pre>
+
+<p>Three things follow. <code>static</code> functions work, because they are in
+<code>.symtab</code> like anything else — and they are usually the internals worth
+counting. Changing <em>which</em> functions are counted needs <strong>no rebuild</strong>:
+rewrite the map and run again. And because it is text with hex addresses, it is the same
+file for a 32-bit big-endian board as for x86-64.</p>
+
+<div class="note">
+  A map is a list of addresses, so after a rebuild it points at whatever now occupies
+  them — a wrong answer nothing downstream could detect. <code>callsight run</code>
+  therefore regenerates it on every run, and <code>analyze</code> compares build ids.
+</div>
+
+<h2 id="cost">What a read costs</h2>
+<p>This is the number that decides what is worth counting, and it varies enormously.</p>
+
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th></th><th>x86-64, bare metal</th><th>aarch64 (Snapdragon 845)</th></tr></thead>
+  <tbody>
+    <tr><td>userspace fast path</td><td><code>rdpmc</code>, a few ns</td><td><strong>unavailable</strong> — Linux does not enable <code>PMUSERENR_EL0</code></td></tr>
+    <tr><td>cost per read</td><td>single-digit ns</td><td><strong>1.4–8.7 µs</strong>, and it moves with DVFS</td></tr>
+    <tr><td>practical granularity</td><td>per call, almost anywhere</td><td>per call, for functions above ~100 µs</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>Two reads per counted call, so on a device where a read is microseconds, counting a
+200 ns leaf function measures the instrument and nothing else. That is not a reason to
+avoid counters on ARM — it is a reason to point them at the right functions, which is what
+the next section automates.</p>
+
+<p>All events open as one group, so a single read returns every value. Where reads are
+syscalls — aarch64, and every 32-bit target — three events therefore cost the same as one.</p>
+
+<h2 id="guard">The guard rail</h2>
+<p>The runtime measures its own read cost at startup, then declines to count any function
+whose observed duration stays below about twenty times what its reads cost. It gathers 64
+samples before deciding, so nothing is demoted on a cold first call, and it reports every
+demotion by name:</p>
+
+<pre><code>! 2 selected function(s) were skipped as too short to measure — at ~8683 ns
+  per counter read, counting them would report the instrument rather than
+  the code (counter-min overrides this)</code></pre>
+
+<p>On a real device that looks like this — the short functions stop being counted after
+their 64 samples, the long one keeps going for every call:</p>
+
+<pre><code>probe_leaf   24000 calls  p50=  416ns   counted on 64/24000 calls
+probe_mid     3000 calls  p50=10781ns   counted on 64/3000 calls
+probe_top        1 calls  p50=37546614ns  counted on 1/1 calls</code></pre>
+
+<p>Set <code>counter-min 0</code> if you would rather have the numbers anyway, and the
+Config Builder shows each function's median duration next to it so the choice is informed
+before the run rather than after.</p>
+
+<h2 id="honesty">Refusing to guess</h2>
+<p><code>perf_event_open</code> succeeding proves nothing. Inside a container the host PMU
+is usually not exposed, and the kernel hands back a counter that opens, reads, and returns
+zero forever. A naive implementation reports zero instructions for every function and
+looks perfectly healthy doing it.</p>
+
+<p>So the runtime runs a loop of known size at startup and checks that the counter actually
+moved and that <code>time_running</code> is not zero. If it did not, counters are switched
+off for the run, once, out loud:</p>
+
+<pre><code>callsight: hardware counters are not usable here (the event opens but never
+reaches hardware — typical in a container); continuing without them</code></pre>
+
+<p>The report that follows is entirely ordinary: no counter columns at all, rather than
+columns full of zeros. Three further checks back it up — whether the PMU was time-slicing
+mid-run, whether any counted function totalled zero across a whole capture (real work does
+not), and whether the address map belongs to a different build.</p>
+
+<div class="note">
+  <strong>Availability can differ per process</strong> on a shared host. That is why the
+  check runs at every process start rather than once, and why the run's own notices are
+  the authority — not what <code>doctor</code> said ten minutes ago.
+</div>
+
+<h2 id="gate">A regression gate</h2>
+<p>Counter metrics are diff keys, which is where the repeatability pays off:</p>
+
+<pre><code><span class="p">$</span> callsight run --format json --out before.json -- ./bin/app.instr
+<span class="p">$</span> <span class="c"># ... change something ...</span>
+<span class="p">$</span> callsight run --format json --out after.json -- ./bin/app.instr
+<span class="p">$</span> callsight diff before.json after.json \
+      --key instructions_per_call --fail-over 1</code></pre>
+
+<p>Available keys are <code>&lt;event&gt;</code> (total), <code>&lt;event&gt;_per_call</code>
+and <code>&lt;event&gt;_self</code>. On the two runs used in the table at the top of this
+page, <code>self_ms</code> reports a 40% regression that is pure scheduling noise while
+<code>instructions_per_call</code> reports the real 1.2% change.</p>
+
+<h2 id="reading">Reading the numbers</h2>
+<p>A counted value is the function's own work <em>plus a small constant</em>: the
+instrumentation between the two readings. The runtime reads as late as it can on entry and
+as early as it can on exit, and subtracts what it can measure of its own footprint, but the
+exit hook's prologue runs before the reading can be taken and cannot be removed.</p>
+
+<p>That constant is the same for every call of every function in a given build, so:</p>
+<ul>
+  <li><strong>Comparing builds is exact</strong> — the constant cancels. This is the use
+      case the feature is for.</li>
+  <li><strong>Comparing against a non-instrumented run is not.</strong> An instrumented
+      binary is a profiling build, and its counts include the profiling.</li>
+  <li><strong>Inclusive counts contain counted callees</strong>, self counts do not — the
+      same relationship the timing columns have.</li>
+</ul>
+
+<p>Counted functions also pay two reads' worth of wall time per call, which is included in
+their times. <code>--subtract-overhead</code> removes it, and the report says so either
+way.</p>
+
+</main>
+<aside class="toc">
+  <div class="toc-title">On this page</div>
+  <ul>
+    <li><a href="#why">Why counters</a></li>
+    <li><a href="#quickstart">Quick start</a></li>
+    <li><a href="#selecting">Choosing what to count</a></li>
+    <li><a href="#cost">What a read costs</a></li>
+    <li><a href="#guard">The guard rail</a></li>
+    <li><a href="#honesty">Refusing to guess</a></li>
+    <li><a href="#gate">A regression gate</a></li>
+    <li><a href="#reading">Reading the numbers</a></li>
+  </ul>
+</aside>
+</div>
+
+<footer>
+  <div class="foot-row">
+    <a href="./">Home</a>
+    <a href="getting-started.html">Getting started</a>
+    <a href="configuration.html">Configuration</a>
+    <a href="reference.html">Reference</a>
+    <a href="analysis.html">Analysis</a>
+    <a href="counters.html">Counters</a>
+    <a href="web-ui.html">Web UI</a>
+    <a href="streaming.html">Streaming</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="https://github.com/harshithsunku/callsight" target="_blank" rel="noopener">GitHub</a>
+  </div>
+  <div>MIT licensed · built for people who profile C and C++ on Linux</div>
+</footer>
+
+<script src="assets/docs.js"></script>
+</body>
+</html>

@@ -28,6 +28,7 @@
       <a href="getting-started.html">Getting started</a>
       <a href="configuration.html">Configuration</a>
       <a href="capture.html">Capture</a>
+      <a href="counters.html">Counters</a>
       <a href="analysis.html">Analysis</a>
       <a href="web-ui.html">Web UI</a>
       <a href="streaming.html">Streaming</a>
@@ -70,7 +71,8 @@
     <tr><td class="nowrap"><code>callsight flags</code></td><td>Print the compiler flags (what the build integrations call)</td></tr>
     <tr><td class="nowrap"><code>callsight analyze [traces/]</code></td><td>Hotspot report, JSON, folded stacks, a Perfetto timeline, or hot call sites</td></tr>
     <tr><td class="nowrap"><code>callsight diff a.json b.json</code></td><td>Compare two JSON reports; fail a build on a regression</td></tr>
-    <tr><td class="nowrap"><code>callsight doctor</code></td><td>Check the toolchain, the config, the trace directory and free space</td></tr>
+    <tr><td class="nowrap"><code>callsight counters</code></td><td>Resolve a config's counter selection against the built binary and write the address map the runtime reads</td></tr>
+    <tr><td class="nowrap"><code>callsight doctor</code></td><td>Check the toolchain, the config, the trace directory, free space and the PMU</td></tr>
     <tr><td class="nowrap"><code>callsight ui</code></td><td>Local web UI (needs the <code>ui</code> extra)</td></tr>
     <tr><td class="nowrap"><code>callsight serve</code></td><td>TCP server for remote streams (needs the <code>stream</code> extra)</td></tr>
     <tr><td class="nowrap"><code>callsight provision</code></td><td>Download the bundled static ctags used by the UI config builder</td></tr>
@@ -105,6 +107,7 @@ loop is identical every time and easy to get subtly wrong — most often by repo
     <tr><td class="nowrap"><code>--mode</code></td><td><code>events</code> (default) or <code>summary</code></td></tr>
     <tr><td class="nowrap"><code>--max-mb</code>, <code>--max-events</code>, <code>--full</code></td><td>Capture limits — see <a href="capture.html">capture limits</a></td></tr>
     <tr><td class="nowrap"><code>--threads</code>, <code>--clock</code></td><td>Thread filter and timestamp source</td></tr>
+    <tr><td class="nowrap"><code>--config</code></td><td>Selection config, whose counter directives are resolved against <code>--exe</code> before the run. Default <code>trace.config</code></td></tr>
     <tr><td class="nowrap"><code>--exe</code></td><td>Binary to symbolize with. Default: the command itself</td></tr>
     <tr><td class="nowrap"><code>--out FILE</code></td><td>Write the report to a file. The traced program shares stdout, so machine-readable output needs somewhere of its own</td></tr>
     <tr><td class="nowrap"><code>--top</code>, <code>--format</code>, <code>--addr2line</code>, <code>--subtract-overhead</code></td><td>Passed through to <code>analyze</code></td></tr>
@@ -276,6 +279,7 @@ callsight_instrument(&lt;target&gt;)</code></pre>
     <tr><td class="nowrap"><code>TRACE_MAX</code></td><td><code>0</code> (unlimited)</td><td>Global event cap, as an upper bound</td></tr>
     <tr><td class="nowrap"><code>TRACE_CLOCK</code></td><td><code>auto</code></td><td><code>auto</code> uses the invariant cycle counter where the hardware has one, else <code>CLOCK_MONOTONIC</code>; <code>mono</code>, <code>raw</code> and <code>tsc</code> force it</td></tr>
     <tr><td class="nowrap"><code>TRACE_THREADS</code></td><td>unset (all)</td><td>Comma-separated globs matched against thread names</td></tr>
+    <tr><td class="nowrap"><code>TRACE_COUNTERS</code></td><td>—</td><td>Path to the hardware-counter map (see <a href="counters.html">counters</a>). Default: <code>&lt;TRACE_DIR&gt;/callsight.counters</code>; <code>none</code> disables counting</td></tr>
     <tr><td class="nowrap"><code>TRACE_SHM</code></td><td>unset</td><td>Streaming mode: POSIX shm ring name</td></tr>
     <tr><td class="nowrap"><code>TRACE_SHM_SIZE</code></td><td>16 MiB</td><td>Ring capacity in bytes</td></tr>
     <tr><td class="nowrap"><code>CC</code></td><td><code>cc</code></td><td>Read by <code>callsight flags</code> for compiler detection</td></tr>
@@ -449,6 +453,7 @@ files the analyzer misreads.</p>
     <a href="configuration.html">Configuration</a>
     <a href="capture.html">Capture</a>
     <a href="analysis.html">Analysis</a>
+    <a href="counters.html">Counters</a>
     <a href="web-ui.html">Web UI</a>
     <a href="streaming.html">Streaming</a>
     <a href="architecture.html">Architecture</a>

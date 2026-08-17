@@ -166,6 +166,15 @@ hotspots (cmake_demo must show only `fib` — `mix` is excluded).
   be compiled with `-finstrument-functions`; every function there carries
   `__attribute__((no_instrument_function))`, and both build integrations
   compile it without the flag.
+- Hardware counters must never report a number that is not real. A counter
+  that opens is not a counter that counts: `trace_pmu_prove` checks
+  `time_running` and a known loop before anything is recorded, multiplexing is
+  reported rather than corrected for, and a function too short to outlast its
+  own reads is demoted and named. Adding a code path that can emit a zeroed
+  counter column is the one regression this feature cannot survive.
+- Counter event names live only in `flags.COUNTER_EVENTS`; the runtime is
+  handed resolved (type, config) pairs through the counter map, so it needs no
+  event table and a new name needs no runtime change.
 - Runtime config env vars use the `TRACE_*` prefix (`TRACE_ENABLE`,
   `TRACE_DIR`, `TRACE_MAX`). matrixlab's own config uses `MATRIXLAB_*` —
   keep the two namespaces separate.

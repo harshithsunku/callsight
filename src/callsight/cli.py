@@ -707,7 +707,10 @@ def main(argv=None):
     p_diff.add_argument("base", help="baseline --format json report")
     p_diff.add_argument("new", help="new --format json report")
     p_diff.add_argument("--key", default="self_ms",
-                        help="metric to compare (default: self_ms)")
+                        help="metric to compare (default: self_ms). A "
+                             "counter event works too — e.g. "
+                             "instructions_per_call — which is steady enough "
+                             "to gate at 1%% where wall time needs 10%%")
     p_diff.add_argument("--threshold", type=float, default=0.0,
                         help="ignore changes smaller than this, in --key "
                              "units")

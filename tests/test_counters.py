@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from callsight import counters, flags
+from callsight import analyze, counters, flags
 from test_elf import build_elf
 
 
@@ -371,3 +371,115 @@ class TestProbe(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCounterReporting(unittest.TestCase):
+    """The report surface: which columns appear, and what can be gated on."""
+
+    def rows(self):
+        return [
+            {"function": "hot", "location": "a.c:1", "calls": 100,
+             "incl_ms": 5.0, "self_ms": 4.0, "min_ns": 1, "max_ns": 2,
+             "p50_ns": 1, "p90_ns": 2, "p99_ns": 2,
+             "counters": {"instructions": {"calls": 100, "total": 100000,
+                                           "self": 80000, "per_call": 1000.0}}},
+            {"function": "plain", "location": "b.c:1", "calls": 10,
+             "incl_ms": 1.0, "self_ms": 1.0, "min_ns": 1, "max_ns": 2,
+             "p50_ns": 1, "p90_ns": 2, "p99_ns": 2},
+        ]
+
+    def report(self, **over):
+        data = {"events": 220, "threads": 1, "functions": 2, "span_ms": 5.0,
+                "unmatched_exits": 0, "unclosed_enters": 0, "mode": "events",
+                "hook_ns": 0, "notices": [], "per_thread": [],
+                "counter_events": ["instructions"], "counter_read_ns": 200,
+                "rows": self.rows()}
+        data.update(over)
+        return data
+
+    def render(self, data):
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            analyze.print_text(data, 20)
+        return buf.getvalue()
+
+    def test_counter_table_appears_only_when_counted(self):
+        self.assertIn("HARDWARE COUNTERS", self.render(self.report()))
+        bare = self.report(counter_events=[],
+                           rows=[r for r in self.rows()
+                                 if "counters" not in r])
+        self.assertNotIn("HARDWARE COUNTERS", self.render(bare))
+
+    def test_uncounted_functions_keep_their_normal_rows(self):
+        """Counters are a separate table precisely so most rows are not
+        padded with blanks."""
+        out = self.render(self.report())
+        self.assertIn("plain", out)
+        counters_section = out.split("HARDWARE COUNTERS")[1]
+        self.assertNotIn("plain", counters_section)
+
+    def test_all_zero_counters_are_called_out(self):
+        """The runtime proves the PMU works once, on one thread. Whether an
+        event reaches hardware can differ per thread on a shared host, and
+        real work never retires zero instructions."""
+        rows = self.rows()
+        rows[0]["counters"]["instructions"].update(total=0, self=0,
+                                                   per_call=0.0)
+        self.assertEqual(analyze._all_zero_rows(rows), 1)
+        notes = analyze._counter_notices(["instructions"], 200, 0, 0, 1,
+                                         False, all_zero=1)
+        self.assertTrue(any("never scheduled onto hardware" in n
+                            for n in notes), notes)
+
+    def test_multiplexing_is_reported_not_corrected(self):
+        notes = analyze._counter_notices(["instructions", "cycles"], 200, 0,
+                                         17, 2, False)
+        self.assertTrue(any("scaled estimates" in n for n in notes), notes)
+
+
+class TestDiffKeys(unittest.TestCase):
+    """Counter metrics as a regression gate.
+
+    The point of the whole feature: on repeated runs of one binary the
+    instruction count moved by a fraction of a percent while wall time on the
+    same machine moved several fold, so a 1% threshold means something here
+    and nothing on self_ms.
+    """
+
+    def rows(self, ms, per_call, total, selfv):
+        return [{"function": "f", "calls": 10, "self_ms": ms,
+                 "counters": {"instructions": {
+                     "calls": 10, "total": total, "self": selfv,
+                     "per_call": per_call}}}]
+
+    def diff(self, key):
+        import json
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: None)
+        (d / "b.json").write_text(json.dumps(
+            {"rows": self.rows(1.0, 1000.0, 10000, 8000)}))
+        (d / "n.json").write_text(json.dumps(
+            {"rows": self.rows(1.4, 1012.0, 10120, 8100)}))
+        return analyze.diff(d / "b.json", d / "n.json", key)
+
+    def test_per_call_counter_key(self):
+        rows, worst = self.diff("instructions_per_call")
+        self.assertAlmostEqual(worst, 1.2, places=1)
+        self.assertEqual(rows[0]["base"], 1000.0)
+
+    def test_total_and_self_keys(self):
+        self.assertAlmostEqual(self.diff("instructions")[1], 1.2, places=1)
+        self.assertAlmostEqual(self.diff("instructions_self")[1], 1.25,
+                               places=2)
+
+    def test_wall_time_would_have_cried_wolf(self):
+        """Same two runs: 40% on wall time, 1.2% on instructions. A gate set
+        where the second is meaningful would fire constantly on the first."""
+        self.assertAlmostEqual(self.diff("self_ms")[1], 40.0, places=1)
+
+    def test_unknown_key_yields_no_rows_rather_than_crashing(self):
+        rows, worst = self.diff("cache-misses_per_call")
+        self.assertEqual(rows, [])
+        self.assertEqual(worst, 0.0)

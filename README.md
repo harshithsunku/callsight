@@ -17,6 +17,7 @@
   <a href="https://harshithsunku.github.io/callsight/getting-started.html">Getting started</a> ·
   <a href="https://harshithsunku.github.io/callsight/configuration.html">Configuration</a> ·
   <a href="https://harshithsunku.github.io/callsight/capture.html">Capture limits</a> ·
+  <a href="https://harshithsunku.github.io/callsight/counters.html">Hardware counters</a> ·
   <a href="https://harshithsunku.github.io/callsight/analysis.html">Analysis</a> ·
   <a href="https://harshithsunku.github.io/callsight/architecture.html">Architecture</a> ·
   <a href="https://harshithsunku.github.io/callsight/reference.html">Reference</a>
@@ -134,6 +135,43 @@ There is also a free-space floor (default 64 MB) and a checked `write()`, so
 a full disk stops the capture and says so instead of silently truncating it.
 **[Capture limits](https://harshithsunku.github.io/callsight/capture.html)**.
 
+## Exact hardware counters
+
+Wall time is the least repeatable thing a computer does. Here is one function,
+one binary, one idle machine, five consecutive runs:
+
+| run | instructions/call | self time |
+|---|---|---|
+| 1 | `223.0` | 4.61 ms |
+| 2 | `223.0` | 4.62 ms |
+| 3 | `223.0` | **22.49 ms** |
+| 4 | `223.0` | 4.60 ms |
+| 5 | `223.0` | 4.58 ms |
+
+Instructions retired do not move. Wall time moved five-fold, because run 3 met
+the scheduler. That is what makes a CI gate you can actually set:
+
+```sh
+callsight diff before.json after.json --key instructions_per_call --fail-over 1
+```
+
+Name what to count in the same config as everything else:
+
+```
+counter instructions,cache-misses
+counter-func handle_request 1
+counter-min auto              # skip anything too short to measure honestly
+```
+
+Three things this refuses to do. It will not report a counter that never
+reached hardware — common inside containers, where a naive implementation
+prints zeros for every function and looks healthy. It will not count a
+function shorter than the read it pays for; it demotes it and says which. And
+it will not accept a fourth event, because past the PMU's registers the kernel
+scales the counts into estimates.
+
+**[Hardware counters](https://harshithsunku.github.io/callsight/counters.html)**.
+
 ## Choosing what to trace
 
 Event volume is the whole game. `trace.config` is where you win it:
@@ -231,10 +269,10 @@ The server writes standard trace files, so analysis is unchanged.
 | Clang XRay | entry/exit with runtime patching | per-function attributes and lists | rebuild, Clang only |
 
 Reach for `perf` first when you want a cheap statistical profile of a whole
-system, kernel and off-CPU time, or hardware counters — callsight does none of
-those. Reach for callsight when you need **exactness** for code you chose:
-every call counted, real p99 and max per function rather than estimates, and
-the functions you *didn't* choose costing exactly nothing.
+system, or kernel and off-CPU time — callsight does neither. Reach for
+callsight when you need **exactness** for code you chose: every call counted,
+real p99 and max per function rather than estimates, and the functions you
+*didn't* choose costing exactly nothing.
 
 Overhead, measured by a benchmark that ships with the repo
 ([`tests/bench/run_bench.py`](tests/bench/run_bench.py)):
@@ -301,8 +339,11 @@ Every flag: **[Reference](https://harshithsunku.github.io/callsight/reference.ht
   graphs, the timeline export and hot call sites need event mode.
 - **Static call-graph resolution** does not follow function pointers,
   macro-generated calls, or C++ dynamic dispatch.
-- **No kernel time, no off-CPU time, no hardware counters.** That is `perf`'s
-  ground, and callsight does not try to take it.
+- **No kernel time and no off-CPU time.** That is `perf`'s ground, and
+  callsight does not try to take it.
+- **Hardware counters need a real PMU**, which most containers do not expose.
+  callsight checks and reports that rather than printing zeros, and on arm64 a
+  counter read is a syscall, so counting is for functions above ~100 µs there.
 
 ## Project
 

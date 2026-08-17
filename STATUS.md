@@ -15,14 +15,14 @@ starts.
 
 | component | state | evidence |
 |---|---|---|
-| Core engine (`flags`, `analyze`) | ✅ done | 186 unit tests, run on Python 3.9 and 3.13 |
+| Core engine (`flags`, `analyze`) | ✅ done | 259 unit tests, run on Python 3.9 and 3.13 |
 | Bounded capture (`TRACE_MAX_MB`, `TRACE_FULL`, free-space floor) | ✅ done | budget of 4 MB holds under a run that would write ~66 MB; `wrap` keeps the tail; every stop reason reported in-band |
 | Summary mode (`TRACE_MODE=summary`) | ✅ done | constant memory and constant output: 2.8 KB for a run 10× longer than one writing 244 MB of events |
 | Latency percentiles (p50/p90/p99 + exact min/max) | ✅ done | log-scale histogram per function in both modes; bracket a known 2 ms sleep in the runtime suite |
 | Trace format v2 (PIE bias, clock anchors, markers) | ✅ done | `header_size`-gated so later versions stay readable; v1 files still analyze |
 | PIE support (no `-no-pie` requirement) | ✅ done | cmake_demo builds a PIE by default and resolves every symbol in CI |
 | Fast clock (invariant TSC / `cntvct_el0`) | ✅ done | 12.0 ns/hook vs 16.2 for `clock_gettime`, measured by `tests/bench/run_bench.py` |
-| Runtime correctness (tid reuse, fork, write errors, races) | ✅ done | 20 end-to-end runtime tests + a ThreadSanitizer leg over the threaded paths |
+| Runtime correctness (tid reuse, fork, write errors, races) | ✅ done | 28 end-to-end runtime tests + a ThreadSanitizer leg over the threaded paths |
 | Portable agents (32-bit, big-endian) | ✅ done | agent writes its native byte order and the host detects it; ARMv7 / PowerPC32 / s390x cross-built in CI, run under qemu, analyzed on x86 — exact call counts, not just "it parsed" |
 | Export formats (`folded`, `json`, `chrome`, `callers`) | ✅ done | folded total matches the text report exactly; chrome opens in ui.perfetto.dev |
 | Regression gate (`callsight diff --fail-over`) | ✅ done | exact call counts make the comparison real; exits non-zero over budget |
@@ -32,48 +32,31 @@ starts.
 | Function/task-level selection (`include-func` + call graph) | ✅ done | `include-func workload_sort` e2e: only the 31-function subtree traced |
 | Thread-level selection (`TRACE_THREADS`) | ✅ done | `TRACE_THREADS='sort-*'` e2e: 3 of 26 threads traced |
 | Make / CMake integration | ✅ done | both fixtures e2e: `unmatched_exits=0`; normal builds carry zero hooks |
+| Hardware counters per function | ✅ done | exact instructions/cache-misses/branch-misses for named functions; 223.0 instr/call identical across 5 runs where wall time moved 5x; all 28 runtime tests pass on aarch64 |
+| Counter guard rail + honesty checks | ✅ done | refuses a counter that never reaches hardware; demotes functions shorter than ~20x a read and names them; refuses a 4th event rather than let the kernel scale counts |
+| Live view (`callsight ui` → Live) | ✅ done | incremental Accumulator + per-file offsets over SSE; local run or a `callsight serve` directory |
 | Web UI (`callsight ui`) | ✅ done | full API-driven cycle, percentiles and capture notices in the table, interactive flame graph with zoom |
 | UI Config Builder | ✅ done | ctags/regex symbol enumeration, dry-run preview, apply-to-disk |
 | Bundled ctags (`callsight provision`) | ✅ done | static universal-ctags 6.2.1 (x86_64/aarch64), sha256-verified |
 | Remote streaming (`TRACE_SHM` → `trace_stream` → zstd/TCP → `callsight serve`) | ✅ done | 400k events / 26 threads, `unmatched_exits=0`; handshake carries the device clock; server output rotates and is capped |
 | Docs site (GitHub Pages) | ✅ done | hand-built static site in `docs/`; link/anchor checker gates every deploy |
-| CI | ✅ done | unit + UI + runtime + TSan + 3 end-to-end smoke jobs on every push |
+| CI | ✅ done | unit + UI + runtime + TSan + 3 cross-architecture (qemu) + 3 end-to-end smoke jobs on every push |
 | Release pipeline | ✅ wired | tag `v*` → GitHub Release + PyPI (trusted publishing) |
 
 ## Roadmap
 
 **Next up**
-- **Hardware counters for selected functions** — `perf_event_open` in
-  per-thread counting mode: exact instructions retired and cache misses for
-  the functions you name, chosen in `trace.config` the same way hooks
-  already are.
-
-  Measured before committing to a design, because the platform story is
-  narrower than it looks:
-
-  | | x86-64 (in an LXC container) | aarch64 (Snapdragon 845, bare metal) |
-  |---|---|---|
-  | `perf_event_open` succeeds | yes | yes |
-  | counters actually count | **no — silently zero** | yes, exactly |
-  | userspace fast path | `cap_user_rdpmc=1` but never scheduled | **unavailable** (`cap_user_rdpmc=0`) |
-  | cost per read | — | **1381 ns** (syscall only) |
-
-  Linux does not enable userspace counter reads on arm64, so every read
-  there is a syscall — 12x the whole hook cost, twice per call. Per-*call*
-  counters are therefore a bare-metal-x86 feature; the portable design is
-  per-*function* selection, where 2.8 us against a 1 ms function is 0.3%.
-  The bulk of the work is refusing to report a number when the counter is
-  not really running: on the x86 box above, a naive implementation would
-  report zero instructions for every function and look perfectly healthy.
-
-  What survives the scrutiny is the payoff. The same loop run six times
-  varied by **one instruction**, against +/-0.24% for wall time on an idle
-  machine — four orders of magnitude steadier, which is what would make
-  `callsight diff` a regression gate you can trust rather than one you have
-  to eyeball.
-- Live stream view in the web UI (watch a remote device's trace arrive)
 - Pure-Python ELF/DWARF symbolizer (optional extra) to drop the binutils
-  dependency for cross-compiled targets entirely
+  dependency for cross-compiled targets entirely. The symbol half already
+  exists — `elf.py` reads ELF32/ELF64 in both byte orders and is checked
+  against `readelf` on real ARM, PowerPC and s390x binaries — so what remains
+  is DWARF line tables.
+- Counter support on the streaming path end to end. The records and markers
+  already travel through the ring and the wire, but the only cross-endian
+  proof today is the file path, not the socket path.
+- Per-call counter outliers in the UI: event mode already records a value per
+  call, so "which single call did 10x the instructions" is answerable and not
+  yet surfaced.
 
 **Explored, on deck** (see the
 [compiler-mechanism survey](https://harshithsunku.github.io/callsight/architecture.html#mechanisms))
@@ -108,5 +91,6 @@ Streaming and CMake smoke procedures:
 - Docs: https://harshithsunku.github.io/callsight/
 - Repo: https://github.com/harshithsunku/callsight
 - Capture limits: [capture](https://harshithsunku.github.io/callsight/capture.html)
+- Hardware counters: [counters](https://harshithsunku.github.io/callsight/counters.html)
 - Compiler-mechanism survey: [architecture — compiler mechanisms](https://harshithsunku.github.io/callsight/architecture.html#mechanisms)
 - Contributing/conventions: [AGENTS.md](https://github.com/harshithsunku/callsight/blob/main/AGENTS.md)

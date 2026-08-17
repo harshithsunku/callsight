@@ -96,6 +96,7 @@
 <nav class="tabs">
   <button id="tabbtn-workflow" class="active" onclick="switchTab('workflow')">Workflow</button>
   <button id="tabbtn-builder" onclick="switchTab('builder')">Config Builder</button>
+  <button id="tabbtn-live" onclick="switchTab('live')">Live</button>
 </nav>
 <main>
 
@@ -193,11 +194,40 @@
         <input type="text" id="cb-func-filter" placeholder="filter functions" oninput="renderFuncsPane()">
         <button class="ghost mini" id="cb-bulk-include" onclick="cbBulk('include')">Include subtree</button>
         <button class="ghost mini" id="cb-bulk-exclude" onclick="cbBulk('exclude')">Exclude</button>
+        <button class="ghost mini" id="cb-bulk-count" onclick="cbBulk('count')">Count</button>
         <button class="ghost mini" id="cb-bulk-clear" onclick="cbBulk('clear')">Clear</button>
         <label class="dim" style="font-size:11px">depth <input type="number" id="cb-depth" min="0" placeholder="full"></label>
       </div>
       <div class="pane-body" id="cb-funcs"></div>
     </div>
+  </div>
+</section>
+
+<section id="cb-counters">
+  <h2>Hardware counters</h2>
+  <div id="cb-probe" class="dim" style="margin-bottom:10px">checking this machine…</div>
+  <div class="row" id="cb-events"></div>
+  <div class="row" style="margin-top:8px">
+    <label class="dim">skip functions shorter than
+      <select id="cb-min">
+        <option value="auto">auto (derived from the measured read cost)</option>
+        <option value="0">nothing — count everything selected</option>
+        <option value="1000">1us</option>
+        <option value="10000">10us</option>
+        <option value="100000">100us</option>
+        <option value="1000000">1ms</option>
+      </select>
+    </label>
+    <label class="dim">binary <input type="text" id="cb-binary" style="width:200px" placeholder="bin/app.instr"></label>
+    <button class="ghost" onclick="cbCounterPreview()">Check selection</button>
+  </div>
+  <div id="cb-counter-result" style="margin-top:8px"></div>
+  <div class="dim" style="margin-top:8px;font-size:12px">
+    Counting reads the CPU's performance counters at a function's entry and
+    exit. The result is exact and repeatable where wall time is not — but a
+    read is not free, so a function much shorter than one is measuring the
+    instrument rather than the code. Only instrumented functions can be
+    counted.
   </div>
 </section>
 
@@ -214,6 +244,35 @@
     Apply saves it and loads the text into the Workflow tab's editor for
     review. Both ask before overwriting a differing existing config.
   </div>
+</section>
+</div>
+
+
+<div id="tab-live" style="display:none">
+<section>
+  <h2>Live view</h2>
+  <div class="row">
+    <label class="dim">binary <input type="text" id="lv-binary" style="width:220px" placeholder="bin/app.instr"></label>
+    <button onclick="liveStart()">Run &amp; watch</button>
+    <button class="ghost" onclick="liveWatch()">Watch a directory</button>
+    <label class="dim">dir <input type="text" id="lv-dir" style="width:220px" placeholder="traces (or a callsight serve output dir)"></label>
+    <button class="ghost" onclick="liveStop()">Stop</button>
+  </div>
+  <div class="dim" style="margin-top:8px;font-size:12px">
+    <strong>Run &amp; watch</strong> launches the binary here and reads its trace as it
+    grows. <strong>Watch a directory</strong> follows one that something else is
+    filling — a <code>callsight serve</code> receiving from a remote device,
+    which is where this earns its keep: a 32-bit or big-endian board streaming
+    in, symbolized and counted on arrival.
+  </div>
+  <div id="lv-status" style="margin-top:10px"></div>
+</section>
+
+<section>
+  <h2>Now</h2>
+  <div class="row" id="lv-stats"><span class="dim">not watching anything yet</span></div>
+  <div id="lv-spark" style="margin:10px 0;height:38px"></div>
+  <div id="lv-table"></div>
 </section>
 </div>
 
@@ -239,10 +298,13 @@ function showLog(text) {
 }
 
 function switchTab(name) {
-  for (const t of ["workflow", "builder"]) {
+  for (const t of ["workflow", "builder", "live"]) {
     document.getElementById("tab-" + t).style.display = t === name ? "" : "none";
     document.getElementById("tabbtn-" + t).className = t === name ? "active" : "";
   }
+  // Probe once, lazily: it opens a real perf event and runs a short loop,
+  // which is not worth doing until someone looks at the builder.
+  if (name === "builder" && counterProbe === null) cbProbe();
 }
 
 async function browse(path, paneId, inputId) {
@@ -512,6 +574,11 @@ const cbExcludedFiles = new Set();  // unchecked file rows
 const cbCheckedFuncs = new Set();   // checked function rows (by name)
 const includePicks = new Map();     // name -> depth (null = full subtree)
 const excludePicks = new Set();     // names
+const counterPicks = new Map();     // name -> depth, for hardware counters
+const counterEvents = new Set();    // event names ticked in the panel
+let counterProbe = null;            // what this machine can actually do
+let counterDurations = {};          // name -> p50 ns from the last run
+let counterTooShort = new Set();    // selected, but below the floor
 
 function cbStatus(msg, cls) {
   const el = document.getElementById("cb-status");
@@ -526,7 +593,9 @@ function esc(s) {
 function cbReset() {
   scanFiles = [];
   cbExcludedFiles.clear(); cbCheckedFuncs.clear();
-  includePicks.clear(); excludePicks.clear();
+  includePicks.clear(); excludePicks.clear(); counterPicks.clear();
+  counterDurations = {}; counterTooShort = new Set();
+  document.getElementById("cb-counter-result").innerHTML = "";
   document.getElementById("cb-panes").style.display = "none";
   document.getElementById("cb-symbols").textContent = "";
   cbStatus("");
@@ -539,7 +608,7 @@ async function cbScan() {
     const d = await api("/api/functions?path=" + encodeURIComponent(project));
     scanFiles = d.files;
     cbExcludedFiles.clear(); cbCheckedFuncs.clear();
-    includePicks.clear(); excludePicks.clear();
+    includePicks.clear(); excludePicks.clear(); counterPicks.clear();
     document.getElementById("cb-panes").style.display = "flex";
     renderFilesPane(); renderFuncsPane();
     const src = d.ctags && d.ctags.source;
@@ -608,7 +677,17 @@ function renderFuncsPane() {
         badge = `<span class="badge acc">subtree${d == null ? "" : " " + d}</span>`;
       } else if (excludePicks.has(fn.name)) {
         badge = '<span class="badge errb">excluded</span>';
+      } else if (counterPicks.has(fn.name)) {
+        const d = counterPicks.get(fn.name);
+        badge = `<span class="badge acc">count${d == null ? "" : " " + d}</span>`;
       }
+      // A function measured shorter than one counter read is measuring the
+      // instrument. Say so on the row, before the run rather than after.
+      if (counterTooShort.has(fn.name))
+        badge += `<span class="badge errb" title="shorter than the counter ` +
+                 `read it would pay for">too short</span>`;
+      else if (counterPicks.has(fn.name) && counterDurations[fn.name])
+        badge += `<span class="badge">${durNs(counterDurations[fn.name])}</span>`;
       html += `<label class="cb-row"><input type="checkbox" ${box} ` +
               `onchange="cbToggleFunc('${fn.name}', this.checked)">` +
               `<span class="name">${esc(fn.name)} <span class="dim">:${fn.line}</span></span>` +
@@ -622,11 +701,95 @@ function renderFuncsPane() {
   document.getElementById("cb-funcs-title").textContent =
     `Functions (${all})` +
     (includePicks.size ? ` · ${includePicks.size} subtree` : "") +
-    (excludePicks.size ? ` · ${excludePicks.size} excluded` : "");
+    (excludePicks.size ? ` · ${excludePicks.size} excluded` : "") +
+    (counterPicks.size ? ` · ${counterPicks.size} counted` : "");
   const suffix = q ? " (filtered)" : "";
   document.getElementById("cb-bulk-include").textContent = "Include subtree" + suffix;
   document.getElementById("cb-bulk-exclude").textContent = "Exclude" + suffix;
+  document.getElementById("cb-bulk-count").textContent = "Count" + suffix;
   document.getElementById("cb-bulk-clear").textContent = "Clear" + suffix;
+}
+
+/* ---- Hardware counters ---- */
+
+function durNs(ns) {
+  if (!ns) return "?";
+  if (ns >= 1e6) return (ns / 1e6).toFixed(1) + "ms";
+  if (ns >= 1e3) return (ns / 1e3).toFixed(1) + "us";
+  return ns + "ns";
+}
+
+/* Ask the machine before offering to count anything: perf_event_open
+   succeeding proves nothing, and a counter that never reaches hardware
+   reports zero for every function while looking perfectly healthy. */
+async function cbProbe() {
+  const el = document.getElementById("cb-probe");
+  try {
+    counterProbe = await api("/api/counters/probe");
+  } catch (e) { el.textContent = e.message; el.className = "err"; return; }
+  el.textContent = counterProbe.summary;
+  el.className = counterProbe.available ? "ok" : "err";
+
+  const box = document.getElementById("cb-events");
+  box.innerHTML = counterProbe.events.map(e =>
+    `<label class="dim" style="margin-right:12px">` +
+    `<input type="checkbox" value="${esc(e)}" onchange="cbToggleEvent(this)"` +
+    `${counterProbe.available ? "" : " disabled"}> ${esc(e)}</label>`).join("")
+    + `<span class="dim" style="font-size:12px">at most ` +
+      `${counterProbe.max_events} — more than the PMU has registers makes ` +
+      `the kernel scale the counts into estimates</span>`;
+  document.getElementById("cb-bulk-count").disabled = !counterProbe.available;
+}
+
+function cbToggleEvent(el) {
+  if (el.checked) {
+    if (counterEvents.size >= (counterProbe ? counterProbe.max_events : 3)) {
+      el.checked = false;
+      cbStatus(`at most ${counterProbe.max_events} events: beyond that the ` +
+               `kernel time-slices the PMU and the counts stop being exact`,
+               "err");
+      return;
+    }
+    counterEvents.add(el.value);
+  } else counterEvents.delete(el.value);
+}
+
+/* Resolve the selection against the built binary and project what it costs.
+   Two reads per counted call, so the previous run's call counts give a real
+   number before anything is run. */
+async function cbCounterPreview() {
+  if (!project) { cbStatus("open a project first", "err"); return; }
+  const binary = document.getElementById("cb-binary").value.trim();
+  if (!binary) { cbStatus("name the instrumented binary first", "err"); return; }
+  const out = document.getElementById("cb-counter-result");
+  out.innerHTML = '<span class="dim">checking…</span>';
+  let d;
+  try {
+    d = await api("/api/counters/preview", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(Object.assign(cbBody(), {binary: binary}))});
+  } catch (e) { out.innerHTML = `<span class="err">${esc(e.message)}</span>`; return; }
+
+  counterDurations = d.durations || {};
+  counterTooShort = new Set(d.too_short || []);
+  renderFuncsPane();
+
+  let html = "";
+  if (!d.available)
+    html += `<div class="err">counters unavailable here: ${esc(d.reason)}</div>`;
+  html += `<div>${d.counted.length} function(s) would be counted` +
+          (d.read_ns ? ` at ~${d.read_ns} ns per read` : "") + `.</div>`;
+  if (d.added_ms > 0)
+    html += `<div${d.span_ms && d.added_ms > d.span_ms * 0.1 ? ' class="err"' : ""}>` +
+            `projected cost: +${d.added_ms.toFixed(1)} ms` +
+            (d.span_ms ? ` on a run that took ${d.span_ms.toFixed(1)} ms` : "") +
+            `</div>`;
+  if (d.too_short.length)
+    html += `<div class="err">${d.too_short.length} too short to measure ` +
+            `(under ${durNs(d.floor_ns)}): ${d.too_short.slice(0,6).map(esc).join(", ")}</div>`;
+  for (const w of d.warnings || [])
+    html += `<div class="err">${esc(w)}</div>`;
+  out.innerHTML = html;
 }
 
 function cbToggleFunc(name, checked) {
@@ -644,8 +807,9 @@ function cbBulk(action) {
   for (const name of [...cbCheckedFuncs]) {
     if (q && !name.toLowerCase().includes(q)) continue;
     if (action === "include") { includePicks.set(name, depth); excludePicks.delete(name); }
-    else if (action === "exclude") { excludePicks.add(name); includePicks.delete(name); }
-    else { includePicks.delete(name); excludePicks.delete(name); }
+    else if (action === "exclude") { excludePicks.add(name); includePicks.delete(name); counterPicks.delete(name); }
+    else if (action === "count") { counterPicks.set(name, depth); excludePicks.delete(name); }
+    else { includePicks.delete(name); excludePicks.delete(name); counterPicks.delete(name); }
     cbCheckedFuncs.delete(name);
     n++;
   }
@@ -659,6 +823,11 @@ function cbBody() {
     excluded_files: [...cbExcludedFiles],
     include_funcs: [...includePicks].map(([name, depth]) => ({name, depth})),
     excluded_funcs: [...excludePicks],
+    counter_events: [...counterEvents],
+    counter_funcs: [...counterPicks].map(([name, depth]) => ({name, depth})),
+    counter_files: [],
+    counter_min: counterPicks.size || counterEvents.size
+      ? document.getElementById("cb-min").value : null,
   };
 }
 
@@ -708,6 +877,97 @@ async function cbApply() {
     if (!await cbWriteConfirmed(g.content)) return;
     cbStatus("trace.config written", "ok");
   } catch (e) { cbStatus(e.message, "err"); }
+}
+
+/* ---- Live tab ----
+   One EventSource; the server decides the cadence and the browser reconnects
+   on its own. Rows are re-rendered in place so the table does not jump. */
+let liveSource = null;
+const liveRates = [];
+
+function lvStatus(msg, cls) {
+  const el = document.getElementById("lv-status");
+  el.textContent = msg; el.className = cls || "dim";
+}
+
+async function liveStart() {
+  if (!project) { lvStatus("open a project on the Workflow tab first", "err"); return; }
+  const binary = document.getElementById("lv-binary").value.trim();
+  if (!binary) { lvStatus("name the instrumented binary", "err"); return; }
+  try {
+    await api("/api/live/start", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({path: project, binary: binary})});
+    lvStatus("running — reading the trace as it grows", "ok");
+    liveConnect();
+  } catch (e) { lvStatus(e.message, "err"); }
+}
+
+async function liveWatch() {
+  if (!project) { lvStatus("open a project on the Workflow tab first", "err"); return; }
+  const binary = document.getElementById("lv-binary").value.trim();
+  const dir = document.getElementById("lv-dir").value.trim() || "traces";
+  if (!binary) { lvStatus("name the binary the trace belongs to (for symbols)", "err"); return; }
+  try {
+    const d = await api("/api/live/watch", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({path: project, binary: binary, dir: dir})});
+    lvStatus("watching " + d.watching, "ok");
+    liveConnect();
+  } catch (e) { lvStatus(e.message, "err"); }
+}
+
+async function liveStop() {
+  if (liveSource) { liveSource.close(); liveSource = null; }
+  try { await api("/api/live/stop", {method:"POST",
+    headers:{"Content-Type":"application/json"}, body:"{}"}); } catch (e) {}
+  lvStatus("stopped");
+}
+
+function liveConnect() {
+  if (liveSource) liveSource.close();
+  liveRates.length = 0;
+  liveSource = new EventSource("/api/live/events");
+  liveSource.onmessage = ev => liveRender(JSON.parse(ev.data));
+  liveSource.onerror = () => { if (liveSource) { liveSource.close(); liveSource = null; } };
+}
+
+function liveRender(d) {
+  if (d.error) lvStatus(d.error, "err");
+  document.getElementById("lv-stats").innerHTML =
+    `<span>${d.running ? "running" : "finished"}</span>` +
+    `<span class="dim">·</span><span>${(d.events||0).toLocaleString()} events</span>` +
+    `<span class="dim">·</span><span>${(d.rate||0).toLocaleString()}/s</span>` +
+    `<span class="dim">·</span><span>${d.threads||0} threads</span>` +
+    `<span class="dim">·</span><span>${d.functions||0} functions</span>` +
+    `<span class="dim">·</span><span>${(d.elapsed_s||0).toFixed(0)}s</span>`;
+
+  liveRates.push(d.rate || 0);
+  if (liveRates.length > 80) liveRates.shift();
+  const peak = Math.max(1, ...liveRates);
+  document.getElementById("lv-spark").innerHTML = liveRates.map(r =>
+    `<span style="display:inline-block;width:5px;margin-right:1px;` +
+    `vertical-align:bottom;background:var(--accent);` +
+    `height:${Math.max(2, Math.round(r / peak * 38))}px"></span>`).join("");
+
+  const events = d.counter_events || [];
+  let head = `<tr><th class="l">function</th><th>calls</th><th>self ms</th>` +
+             `<th>incl ms</th>` +
+             events.map(e => `<th>${esc(e)}/call</th>`).join("") + `</tr>`;
+  let body = (d.rows || []).slice(0, 25).map(r => {
+    const cells = events.map(e => {
+      const c = r.counters && r.counters[e];
+      return `<td>${c ? c.per_call.toLocaleString(undefined,
+              {maximumFractionDigits:0}) : "—"}</td>`;
+    }).join("");
+    return `<tr><td class="l">${esc(r.function)}</td>` +
+           `<td>${r.calls.toLocaleString()}</td>` +
+           `<td>${r.self_ms.toFixed(3)}</td>` +
+           `<td>${r.incl_ms.toFixed(3)}</td>${cells}</tr>`;
+  }).join("");
+  document.getElementById("lv-table").innerHTML =
+    body ? `<table>${head}${body}</table>`
+         : '<span class="dim">no events yet</span>';
 }
 </script>
 </body>

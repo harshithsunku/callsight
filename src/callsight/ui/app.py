@@ -6,15 +6,17 @@ the instrumented profile, run it with tracing enabled, and analyze the
 resulting traces — all through the same code as the CLI.
 """
 
+import json
 import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from callsight import analyze, cli, flags, provision, symbols
@@ -166,6 +168,10 @@ class GenerateBody(BaseModel):
     excluded_files: list[str] = []
     include_funcs: list[IncludeFunc] = []
     excluded_funcs: list[str] = []
+    counter_events: list[str] = []
+    counter_funcs: list[IncludeFunc] = []
+    counter_files: list[str] = []
+    counter_min: Optional[str] = None
 
 
 @app.post("/api/config/generate")
@@ -174,14 +180,127 @@ def generate_config(body: GenerateBody):
 
     Returns the text only; writing happens via POST /api/config."""
     project_path(body.path)
+    cmin = body.counter_min
+    if cmin is not None and cmin != "auto":
+        try:
+            cmin = int(cmin)
+        except ValueError:
+            raise HTTPException(400, f"counter-min: want 'auto' or a number "
+                                     f"of nanoseconds, got {cmin!r}")
     try:
         content = flags.render_config(
             excluded_files=body.excluded_files,
             include_funcs=[(f.name, f.depth) for f in body.include_funcs],
-            excluded_funcs=body.excluded_funcs)
+            excluded_funcs=body.excluded_funcs,
+            counter_events=body.counter_events,
+            counter_funcs=[(f.name, f.depth) for f in body.counter_funcs],
+            counter_files=body.counter_files,
+            counter_min=cmin)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"content": content}
+
+
+@app.get("/api/counters/probe")
+def counters_probe(event: str = "instructions"):
+    """What hardware counters can actually do on this machine, right now.
+
+    The UI shows this before offering to count anything. perf_event_open
+    succeeding proves nothing — inside a container the event opens, reads,
+    and returns zero forever — so this runs a known loop and checks the
+    counter really moved. Without it the Count button would cheerfully
+    produce a table of zeros.
+    """
+    from callsight import counters
+    p = counters.probe(event)
+    p["summary"] = counters.describe_probe(p)
+    p["events"] = sorted(flags.COUNTER_EVENTS)
+    p["max_events"] = flags.COUNTER_MAX_EVENTS
+    return p
+
+
+class CounterPreviewBody(BaseModel):
+    path: str
+    binary: str
+    counter_events: list[str] = []
+    counter_funcs: list[IncludeFunc] = []
+    counter_files: list[str] = []
+    counter_min: Optional[str] = None
+    excluded_files: list[str] = []
+    include_funcs: list[IncludeFunc] = []
+    excluded_funcs: list[str] = []
+
+
+@app.post("/api/counters/preview")
+def counters_preview(body: CounterPreviewBody):
+    """Dry-run a counter selection against the built binary.
+
+    Answers the two questions worth answering before a run rather than
+    after: which of these names actually resolve to countable functions, and
+    what will counting them cost. The cost is knowable exactly — two reads
+    per counted call — so it comes from the previous run's call counts.
+    """
+    from callsight import counters
+
+    p = project_path(body.path)
+    binary = (p / body.binary).resolve()
+    if not binary.is_file() or p not in binary.parents:
+        raise HTTPException(404, f"{body.binary}: not found under project")
+
+    text = flags.render_config(
+        excluded_files=body.excluded_files,
+        include_funcs=[(f.name, f.depth) for f in body.include_funcs],
+        excluded_funcs=body.excluded_funcs,
+        counter_events=body.counter_events,
+        counter_funcs=[(f.name, f.depth) for f in body.counter_funcs],
+        counter_files=body.counter_files)
+    tmp = p / ".callsight-preview.config"
+    try:
+        tmp.write_text(text)
+        spec = flags.parse_config(str(tmp))
+        sel = counters.resolve_selection(spec, binary, flags.scan_sources(p),
+                                         p)
+    except SystemExit as e:
+        raise HTTPException(400, str(e))
+    except (OSError, ValueError) as e:
+        raise HTTPException(400, str(e))
+    finally:
+        tmp.unlink(missing_ok=True)
+
+    probe = counters.probe(body.counter_events[0]
+                           if body.counter_events else "instructions")
+    read_ns = probe.get("read_ns") or 0
+
+    # Cost projection from the last analyzed run, when there is one.
+    rows, added_ns, span_ms = [], 0, 0.0
+    try:
+        data = analyze.collect(p / "traces", str(binary))
+        rows = data["rows"]
+        span_ms = data.get("span_ms", 0.0)
+        added_ns = counters.estimate_overhead_ns(sel, rows, read_ns)
+    except (RuntimeError, OSError):
+        pass
+
+    durations = {r["function"]: r.get("p50_ns", 0) for r in rows}
+    floor_ns = probe.get("floor_ns") or 0
+    chosen = [n for _a, n in sel.entries]
+    return {
+        "available": probe["available"],
+        "reason": probe["reason"],
+        "read_ns": read_ns,
+        "floor_ns": floor_ns,
+        "counted": chosen,
+        "unresolved": sel.unresolved,
+        "not_instrumented": sel.not_instrumented,
+        "warnings": sel.warnings,
+        # Named individually so the UI can grey them out with the reason,
+        # rather than the run silently declining to count them later.
+        "too_short": [n for n in chosen
+                      if floor_ns and 0 < durations.get(n, 0) < floor_ns],
+        "durations": {n: durations.get(n, 0) for n in chosen},
+        "added_ms": added_ns / 1e6,
+        "span_ms": span_ms,
+    }
 
 
 @app.get("/api/subtree")
@@ -303,6 +422,242 @@ def analyze_traces(path: str, binary: str, top: int = Query(50, ge=0)):
     if top:
         data["rows"] = data["rows"][:top]
     return data
+
+
+class LiveSession:
+    """A report that grows while the program is still running.
+
+    One persistent Accumulator plus a byte offset per trace file. Each tick
+    reads only what the files have gained, so the cost is proportional to
+    *new* events rather than to the whole trace — which is what makes a
+    once-a-second refresh viable on a capture heading for millions of events.
+
+    Two sources, one pipeline: a binary this server launched, or a directory
+    `callsight serve` is filling from a remote device. Neither knows it is
+    being watched; both are just trace files appearing on disk.
+    """
+
+    def __init__(self, tracedir, exe, proc=None, addr2line=None):
+        self.tracedir = Path(tracedir)
+        self.exe = str(exe)
+        self.proc = proc
+        self.addr2line = addr2line
+        self.acc = analyze.Accumulator()
+        self.offsets = {}          # path -> bytes consumed
+        self.metas = {}            # path -> header meta, parsed once
+        self.names = {}            # resolved symbols, cached across ticks
+        self.notices = []
+        self.started = time.time()
+        self.last_events = 0
+        self.rate = 0.0
+        self.error = None
+
+    @property
+    def running(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def stop(self):
+        """SIGTERM, not SIGKILL: a clean exit flushes each thread's buffered
+        tail, and that tail is usually the interesting part."""
+        if self.running:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+
+    def tick(self):
+        """Consume whatever is new and return the current report."""
+        for path in sorted(self.tracedir.glob("trace.*.bin")):
+            key = str(path)
+            meta = self.metas.get(key)
+            if meta is None:
+                meta = analyze.read_header(path)
+                if meta is None:
+                    self.metas[key] = False     # remember not to retry
+                    continue
+                if meta["flags"] & analyze.HF_TICKS:
+                    meta["anchor"] = None
+                self.metas[key] = meta
+            if meta is False:
+                continue
+            try:
+                start = self.offsets.get(key, 0)
+                if path.stat().st_size <= max(start, meta["header_size"]):
+                    continue
+                end = [start]
+                for ev in analyze.read_events(path, meta, self.notices,
+                                              start_offset=start,
+                                              offset_out=end):
+                    self.acc.feed(*ev)
+                self.offsets[key] = end[0]
+            except (OSError, RuntimeError) as e:
+                self.error = str(e)
+        return self.report()
+
+    def report(self):
+        elapsed = time.time() - self.started
+        # finish() only reads the accumulator's state, so calling it once a
+        # second on a still-growing capture is fine.
+        stats, threads, unmatched, open_frames = self.acc.finish()
+
+        new = {a for a in self.acc.addrs if a not in self.names}
+        if new:
+            try:
+                self.names.update(analyze.resolve(new, self.exe,
+                                                  self.addr2line))
+            except RuntimeError as e:
+                self.error = str(e)
+                self.names.update({a: ("??", "??:0") for a in new})
+
+        events = [(t, c) for m in self.metas.values()
+                  if m and m.get("counters") for t, c in m["counters"]
+                  if t is not None]
+        event_names = [analyze.counter_event_name(t, c) for t, c in events]
+
+        rows = []
+        for func, (calls, incl, self_t, max_t) in stats.items():
+            fn, loc = self.names.get(func, ("??", "??:0"))
+            counted = self.acc.counter_calls.get(func, 0)
+            row = {"function": fn, "location": loc, "calls": calls,
+                   "incl_ms": incl / 1e6, "self_ms": self_t / 1e6,
+                   "max_ns": max_t}
+            if counted and event_names:
+                row["counters"] = {
+                    name: {"calls": counted,
+                           "total": self.acc.counter_incl[func][i],
+                           "per_call": self.acc.counter_incl[func][i] / counted}
+                    for i, name in enumerate(event_names)}
+            rows.append(row)
+        rows.sort(key=lambda r: r["self_ms"], reverse=True)
+
+        total = self.acc.events
+        self.rate = (total - self.last_events)
+        self.last_events = total
+        return {"events": total, "rate": self.rate, "threads": len(threads),
+                "functions": len(stats), "elapsed_s": elapsed,
+                "unmatched_exits": unmatched, "open_frames": open_frames,
+                "running": self.running, "error": self.error,
+                "counter_events": event_names, "rows": rows[:60]}
+
+
+_live = {"session": None}
+
+
+class LiveStartBody(BaseModel):
+    path: str
+    binary: str
+    mode: str = "events"
+    trace_max: int = Field(5000000, ge=0)
+
+
+@app.post("/api/live/start")
+def live_start(body: LiveStartBody):
+    """Launch a binary and watch its trace grow. Non-blocking, unlike /api/run."""
+    from callsight import counters
+
+    p = project_path(body.path)
+    binary = (p / body.binary).resolve()
+    if not binary.is_file() or p not in binary.parents:
+        raise HTTPException(404, f"{body.binary}: not found under project")
+    live_stop()
+
+    tracedir = p / "traces"
+    tracedir.mkdir(exist_ok=True)
+    for stale in tracedir.glob("trace.*.bin"):
+        stale.unlink()
+
+    env = dict(os.environ, TRACE_ENABLE="1", TRACE_MODE=body.mode,
+               TRACE_MAX=str(body.trace_max), TRACE_DIR=str(tracedir))
+    # Same rule as `callsight run`: regenerate the counter map so it can
+    # never describe a previous build.
+    config = p / "trace.config"
+    if config.exists():
+        try:
+            spec = flags.parse_config(str(config))
+            if spec.counter_events or spec.counter_funcs or spec.counter_files:
+                sel = counters.resolve_selection(spec, binary,
+                                                 flags.scan_sources(p), p)
+                counters.write_map(counters.map_path(tracedir), sel, binary)
+                env["TRACE_COUNTERS"] = counters.map_path(tracedir)
+        except (SystemExit, OSError, ValueError):
+            pass          # counters are optional; the run is not
+    try:
+        proc = subprocess.Popen([str(binary)], cwd=p, env=env,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+    except OSError as e:
+        raise HTTPException(400, str(e))
+    _live["session"] = LiveSession(tracedir, binary, proc)
+    return {"ok": True, "watching": str(tracedir)}
+
+
+class LiveWatchBody(BaseModel):
+    path: str
+    binary: str
+    dir: str = "traces"
+
+
+@app.post("/api/live/watch")
+def live_watch(body: LiveWatchBody):
+    """Watch a directory someone else is filling — `callsight serve`
+    receiving from a remote device, most usefully."""
+    p = project_path(body.path)
+    binary = (p / body.binary).resolve()
+    if not binary.is_file() or p not in binary.parents:
+        raise HTTPException(404, f"{body.binary}: not found under project")
+    tracedir = Path(body.dir)
+    if not tracedir.is_absolute():
+        tracedir = p / tracedir
+    if not tracedir.is_dir():
+        raise HTTPException(404, f"{tracedir}: not a directory")
+    live_stop()
+    _live["session"] = LiveSession(tracedir, binary)
+    return {"ok": True, "watching": str(tracedir)}
+
+
+@app.post("/api/live/stop")
+def live_stop():
+    s = _live.get("session")
+    if s is not None:
+        s.stop()
+    return {"ok": True}
+
+
+@app.get("/api/live/events")
+def live_events():
+    """Server-sent events: one report per second while anything is happening.
+
+    SSE rather than polling because the browser reconnects on its own and the
+    server decides the cadence — and because the interesting case is a device
+    streaming in, where the arrival rate is not ours to predict.
+    """
+    s = _live.get("session")
+    if s is None:
+        raise HTTPException(400, "nothing is being watched — start a run "
+                                 "or point at a serve directory first")
+
+    def stream():
+        idle = 0
+        while True:
+            try:
+                payload = s.tick()
+            except Exception as e:                  # never kill the stream
+                payload = {"error": str(e), "rows": [], "running": False}
+            yield f"data: {json.dumps(payload)}\n\n"
+            if not payload.get("running") and payload.get("rate", 0) == 0:
+                idle += 1
+                # A finished run still gets a few ticks: the last flush can
+                # land after the process is gone.
+                if idle > 3:
+                    break
+            else:
+                idle = 0
+            time.sleep(1.0)
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
 
 
 @app.get("/api/flame")

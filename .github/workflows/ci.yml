@@ -190,6 +190,25 @@ jobs:
           test "$bytes" -lt 1048576
           uv run callsight analyze traces/ --exe bin/matrixlab.instr \
             | grep -q "mode=summary"
+      - name: counter selection resolves and stays honest
+        # GitHub runners are containers, so the PMU is not exposed and this
+        # exercises the path that matters most: a machine WITHOUT counters
+        # must produce an ordinary report, never a table of zeros.
+        run: |
+          cd tests/matrixlab
+          rm -rf traces && cp trace.config /tmp/tc.bak
+          printf '\ncounter instructions\ncounter-func matrix_multiply_naive 1\n' \
+            >> trace.config
+          uv run callsight counters . --exe bin/matrixlab.instr --list \
+            | tee counters.out
+          grep -q "matrix_multiply_naive" counters.out
+          test -f traces/callsight.counters
+          # A function with no hooks can never be counted; saying so is the
+          # point, and it must be a warning rather than a dead address.
+          printf 'counter-func crc32_update 0\n' >> trace.config
+          uv run callsight counters . --exe bin/matrixlab.instr 2>&1 \
+            | grep -q "no instrumentation hooks"
+          cp /tmp/tc.bak trace.config
       - name: export formats
         run: |
           cd tests/matrixlab

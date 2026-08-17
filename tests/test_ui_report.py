@@ -127,3 +127,94 @@ class TestFlameEndpoint(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipIf(ui_app is None, "needs the optional 'ui' extra (FastAPI)")
+class TestCounterEndpoints(unittest.TestCase):
+    """The counter panel's job is to be honest about this machine before
+    offering to count anything."""
+
+    def test_probe_reports_capability_and_the_event_menu(self):
+        p = ui_app.counters_probe()
+        self.assertIn("available", p)
+        self.assertIn("instructions", p["events"])
+        self.assertEqual(p["max_events"], 3)
+        # Either answer is fine; claiming availability without a reason is not.
+        if not p["available"]:
+            self.assertTrue(p["reason"])
+
+    def test_generate_round_trips_counter_selections(self):
+        from callsight import flags
+        with tempfile.TemporaryDirectory() as tmp:
+            body = ui_app.GenerateBody(
+                path=tmp, counter_events=["instructions"],
+                counter_funcs=[ui_app.IncludeFunc(name="hot", depth=1)],
+                counter_min="auto")
+            text = ui_app.generate_config(body)["content"]
+        self.assertIn("counter instructions", text)
+        self.assertIn("counter-func hot 1", text)
+        self.assertIn("counter-min auto", text)
+
+    def test_generate_rejects_a_bad_floor(self):
+        from fastapi import HTTPException
+        with tempfile.TemporaryDirectory() as tmp:
+            body = ui_app.GenerateBody(path=tmp, counter_min="soon")
+            with self.assertRaises(HTTPException):
+                ui_app.generate_config(body)
+
+
+@unittest.skipIf(ui_app is None, "needs the optional 'ui' extra (FastAPI)")
+class TestLiveSession(unittest.TestCase):
+    """The live view must read only what a growing file has gained, or a
+    once-a-second refresh would re-parse the whole trace every tick."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+
+    def session(self):
+        s = ui_app.LiveSession(self.dir, "exe")
+        s.names = {0xA: ("hot", "a.c:1"), 0xB: ("warm", "b.c:1")}
+        return s
+
+    def test_only_new_bytes_are_read_on_each_tick(self):
+        path = self.dir / "trace.1.1.0.bin"
+        path.write_bytes(pack_events([enter(1, 0xA, 0), leave(1, 0xA, 100)]))
+        s = self.session()
+        first = s.tick()
+        self.assertEqual(first["events"], 2)
+        offset = dict(s.offsets)
+
+        # Nothing appended: the tick must consume nothing.
+        self.assertEqual(s.tick()["events"], 2)
+        self.assertEqual(s.offsets, offset)
+
+        # Append two more events; only those may be read.
+        with open(path, "ab") as f:
+            f.write(pack_events([enter(1, 0xB, 200), leave(1, 0xB, 300)])
+                    [analyze.HEADER.size:])
+        third = s.tick()
+        self.assertEqual(third["events"], 4)
+        self.assertEqual(third["rate"], 2)
+
+    def test_a_half_written_record_is_resumed_not_skipped(self):
+        """A file being appended to is caught mid-record on almost every
+        tick; losing those bytes would drop events silently."""
+        path = self.dir / "trace.1.1.0.bin"
+        full = pack_events([enter(1, 0xA, 0), leave(1, 0xA, 100)])
+        path.write_bytes(full[:-8])          # last record cut short
+        s = self.session()
+        self.assertEqual(s.tick()["events"], 1)
+        with open(path, "wb") as f:
+            f.write(full)
+        self.assertEqual(s.tick()["events"], 2)
+
+    def test_report_carries_counter_columns_when_present(self):
+        s = self.session()
+        s.acc.feed(1, analyze.ENTER, 0xA, 0)
+        s.acc.feed(1, analyze.EXIT, 0xA, 100)
+        s.acc.feed(1, analyze.COUNTER, 4200, 0, 0)
+        s.metas["x"] = {"counters": [(0, 1)], "header_size": 80}
+        row = next(r for r in s.report()["rows"] if r["function"] == "hot")
+        self.assertEqual(row["counters"]["instructions"]["per_call"], 4200)

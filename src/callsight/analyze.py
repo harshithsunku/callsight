@@ -272,7 +272,8 @@ MARK_NAMES = {
 }
 
 
-def read_events(path, meta=None, notices=None):
+def read_events(path, meta=None, notices=None, start_offset=0,
+                offset_out=None):
     """Yield (tid, kind, func, ts_ns, caller) from one trace file.
 
     Addresses come back as link addresses (the PIE load bias already
@@ -284,7 +285,12 @@ def read_events(path, meta=None, notices=None):
     Counter records (kind COUNTER) are yielded with the three raw per-event
     deltas in the func/ts/caller slots, in slot order and untouched: they are
     counts, so neither the load bias nor the clock scale applies to them.
-    They always follow the EXIT of the call they belong to."""
+    They always follow the EXIT of the call they belong to.
+
+    start_offset resumes from a byte position reached earlier, and
+    offset_out (a one-element list) receives the position reached this time.
+    That is what lets the live view re-read only what a growing file has
+    gained since the last tick, instead of the whole thing every second."""
     if meta is None:
         meta = read_header(path)
         if meta is None:
@@ -300,7 +306,8 @@ def read_events(path, meta=None, notices=None):
     event = meta.get("layout", LE).event
 
     with open(path, "rb") as f:
-        f.seek(meta["header_size"])
+        f.seek(max(start_offset, meta["header_size"])
+               if start_offset else meta["header_size"])
         block = READ_BLOCK_EVENTS * event.size
         rest = b""
         while True:
@@ -331,9 +338,14 @@ def read_events(path, meta=None, notices=None):
                     ts = t0_ns + int((ts - t0_ticks) * scale)
                 yield tid, kind, func - bias, ts, caller - bias if caller else 0
             rest = chunk[usable:]
-        if rest:
+        if offset_out is not None:
+            # Stop on a record boundary, so a file still being written is
+            # resumed at the start of the record that was half there.
+            offset_out[0] = f.tell() - len(rest)
+        if rest and offset_out is None:
             # A killed process can leave a partial record behind; the events
-            # before it are still good.
+            # before it are still good. (A live reader gets a partial tail
+            # every tick by construction, so it is not worth remarking on.)
             print(f"warning: {path}: {len(rest)} trailing bytes ignored "
                   f"(truncated final record)", file=sys.stderr)
             notices.append({"kind": "truncated", "payload": len(rest),
@@ -698,12 +710,32 @@ def _open_metas(files):
     return metas
 
 
+def _all_zero_rows(rows):
+    """Counted rows whose every event totalled zero — real work does not."""
+    n = 0
+    for r in rows:
+        c = r.get("counters")
+        if c and all(v["total"] == 0 for v in c.values()):
+            n += 1
+    return n
+
+
 def _counter_notices(event_names, read_ns, skipped, mux, counted_rows,
-                     subtract_overhead):
+                     subtract_overhead, all_zero=0):
     """What a counted capture has to admit about itself."""
     out = []
     if not event_names:
         return out
+    if all_zero:
+        # The runtime proves the counter works before recording anything, but
+        # it proves it once, on one thread, at startup — and whether an event
+        # is scheduled onto hardware can differ per process and per thread on
+        # a shared host. Real work never retires zero instructions, so this
+        # is the same "silently zero" failure caught one layer later.
+        out.append(f"{all_zero} counted function(s) reported zero for every "
+                   f"event: those counters were never scheduled onto "
+                   f"hardware, so treat their columns as missing, not as "
+                   f"measurements")
     out.append(f"hardware counters: {', '.join(event_names)} on "
                f"{counted_rows} function(s); each value includes a small "
                f"constant instrumentation cost (the hook code between the "
@@ -858,7 +890,7 @@ def collect(tracedir, exe, folded=False, callers=False, addr2line=None,
                            max((m.get("counter_mux", 0) for m in metas),
                                default=0),
                            sum(1 for r in rows if "counters" in r),
-                           subtract_overhead),
+                           subtract_overhead, _all_zero_rows(rows)),
             "pids": sorted({m["pid"] for m in metas if m["pid"]}),
             "rows": rows, "per_thread": per_thread}
     if folded:
@@ -965,7 +997,7 @@ def _collect_summary(files, exe, addr2line, subtract_overhead):
         max((m["counter_skipped"] for m in metas), default=0),
         max((m["counter_mux"] for m in metas), default=0),
         sum(r.get("counters", {}) != {} for r in rows),
-        subtract_overhead))
+        subtract_overhead, _all_zero_rows(rows)))
     per_thread = [{"tid": m["tid"], "events": 0, "span_ms": m["span"] / 1e6}
                   for m in sorted(metas, key=lambda m: m["tid"])]
     return {"events": calls_total * 2, "threads": len(metas),
@@ -1026,6 +1058,25 @@ def print_text(data, top):
                   f"{_dur(r.get('p50_ns', 0)):>9} {_dur(r.get('p99_ns', 0)):>9} "
                   f"{_dur(r.get('max_ns', 0)):>9}  "
                   f"{r['function']} ({r['location']})")
+        print()
+
+    # Counters get a table of their own rather than more columns on the ones
+    # above: only some functions are counted, so most rows would be blank,
+    # and the sort that matters here is per-call, not total.
+    events = data.get("counter_events") or []
+    counted = [r for r in data["rows"] if r.get("counters")]
+    if events and counted:
+        first = events[0]
+        print(f"== HARDWARE COUNTERS ({', '.join(events)}) ==")
+        cols = "".join(f"{e[:14] + '/call':>18}" for e in events)
+        print(f"{'calls':>10}{cols}  function")
+        counted.sort(key=lambda r: r["counters"][first]["per_call"],
+                     reverse=True)
+        for r in counted[:top]:
+            vals = "".join(
+                f"{r['counters'][e]['per_call']:>18,.1f}" for e in events)
+            print(f"{r['counters'][first]['calls']:>10}{vals}  "
+                  f"{r['function']}")
         print()
 
     print("== PER-THREAD SUMMARY ==")
@@ -1112,6 +1163,29 @@ def emit_chrome(tracedir, exe, addr2line=None, out=None):
     return state["n"]
 
 
+def _diff_value(row, key):
+    """One row's value for a diff key, or None if it has none.
+
+    Counter metrics are addressed as '<event>' or '<event>_per_call' — e.g.
+    'instructions_per_call' — which is the key worth gating on: it moved by
+    one part in 4471 across repeated runs of the same binary, where wall time
+    on the same machine moved five-fold. A threshold that would be noise on
+    self_ms is a real signal here.
+    """
+    if row is None:
+        return None
+    if key in row:
+        return row[key]
+    counters = row.get("counters") or {}
+    if key.endswith("_per_call") and key[:-len("_per_call")] in counters:
+        return counters[key[:-len("_per_call")]]["per_call"]
+    if key in counters:
+        return counters[key]["total"]
+    if key.endswith("_self") and key[:-len("_self")] in counters:
+        return counters[key[:-len("_self")]]["self"]
+    return None
+
+
 def diff(base_path, new_path, key="self_ms", threshold=0.0):
     """Compare two --format json reports function by function.
 
@@ -1129,8 +1203,12 @@ def diff(base_path, new_path, key="self_ms", threshold=0.0):
     for name in sorted(set(old_rows) | set(new_rows)):
         a = old_rows.get(name)
         b = new_rows.get(name)
-        old_v = a[key] if a else 0.0
-        new_v = b[key] if b else 0.0
+        old_v = _diff_value(a, key)
+        new_v = _diff_value(b, key)
+        if old_v is None and new_v is None:
+            continue        # neither side has this metric for this function
+        old_v = old_v or 0.0
+        new_v = new_v or 0.0
         if old_v > 0:
             pct = (new_v - old_v) / old_v * 100.0
         else:
