@@ -184,6 +184,25 @@ the next section automates.</p>
 <p>All events open as one group, so a single read returns every value. Where reads are
 syscalls — aarch64, and every 32-bit target — three events therefore cost the same as one.</p>
 
+<p>Measured by the benchmark that ships with the repo
+(<a href="https://github.com/harshithsunku/callsight/blob/main/tests/bench/run_bench.py" target="_blank" rel="noopener"><code>tests/bench/run_bench.py</code></a>),
+counting <em>every</em> call of a function that does nothing, on the Snapdragon:</p>
+
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th>mode</th><th>ns per hook</th></tr></thead>
+  <tbody>
+    <tr><td><code>TRACE_MODE=summary</code></td><td>98</td></tr>
+    <tr><td>the same, with counters on both functions</td><td><strong>1970</strong></td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>Twenty times the cost, which is the worst case by construction and precisely why the
+guard rail exists: point counters at functions coarse enough that two reads disappear into
+them, and that multiplier collapses. On x86-64, where the read is an
+<code>rdpmc</code> instruction rather than a syscall, it barely appears at all.</p>
+
 <h2 id="guard">The guard rail</h2>
 <p>The runtime measures its own read cost at startup, then declines to count any function
 whose observed duration stays below about twenty times what its reads cost. It gathers 64

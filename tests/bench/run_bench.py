@@ -25,6 +25,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(ROOT / "src"))
 RUNTIME = ROOT / "src" / "callsight" / "runtime"
 BENCH = Path(__file__).resolve().parent / "bench.c"
 CC = os.environ.get("CC", "cc")
@@ -78,6 +79,34 @@ def measure(exe, iters, repeat, env=None, tmp=None, label="", work=0):
     return min(times), statistics.median(times), hooks, written
 
 
+def counter_map(exe, tmp, events=("instructions",)):
+    """A counter map covering the two workload functions, or None.
+
+    Returns None when this machine has no usable PMU — which is the common
+    case in a container, and reporting a number measured with the counters
+    silently switched off would be worse than reporting nothing.
+    """
+    try:
+        from callsight import counters, elf, flags
+    except ImportError:
+        return None
+    if not counters.probe(events[0])["available"]:
+        return None
+    try:
+        syms = elf.functions(exe)
+        picked = [(syms[n][0], n) for n in ("bench_leaf", "bench_mid")
+                  if n in syms]
+        if not picked:
+            return None
+        sel = counters.Selection(
+            events=[(e,) + flags.parse_counter_event(e) for e in events],
+            entries=sorted(picked), min_ns=0, unresolved=[],
+            not_instrumented=[], warnings=[])
+        return counters.write_map(Path(tmp) / "callsight.counters", sel, exe)
+    except Exception:
+        return None
+
+
 def human(n):
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024 or unit == "GB":
@@ -118,6 +147,21 @@ def main():
              {"TRACE_ENABLE": "1", "TRACE_MODE": "summary"}),
         ]
 
+        # Counters, when this machine can actually take them. Two reads per
+        # counted call, and on a target where a read is a syscall that
+        # dominates everything else here — which is the point of measuring
+        # it rather than asserting it.
+        cmap = counter_map(instr, tmp)
+        if cmap:
+            scenarios += [
+                ("+ counters (summary)",
+                 {"TRACE_ENABLE": "1", "TRACE_MODE": "summary",
+                  "TRACE_COUNTERS": str(cmap)}),
+                ("+ counters (events)",
+                 {"TRACE_ENABLE": "1", "TRACE_MAX_MB": "0",
+                  "TRACE_COUNTERS": str(cmap)}),
+            ]
+
         header = (f"{'mode':<34}{'total':>10}{'vs plain':>10}"
                   f"{'ns/hook':>10}{'on disk':>10}")
         print(header)
@@ -132,6 +176,16 @@ def main():
             print(f"{label:<34}{ns / 1e6:>9.1f}ms{ns / base:>10.2f}"
                   f"{per_hook:>10.1f}"
                   f"{human(written) if written else '-':>10}")
+
+        if not cmap:
+            print("\nhardware counters: unavailable on this machine, so the "
+                  "counted rows are\nomitted rather than measured with the "
+                  "counters silently switched off.")
+        else:
+            print("\nThe counted rows above pay two counter reads per call "
+                  "on BOTH workload\nfunctions, which is the worst case: "
+                  "real selections name a handful of\nfunctions coarse "
+                  "enough that the reads disappear into them.")
 
         print(f"\n{hooks:,} hook calls per run "
               f"({args.iters:,} iterations x 2 functions x enter+exit)")

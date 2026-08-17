@@ -57,7 +57,8 @@ Layout:
   compiler, so it lives in a subdirectory `unittest discover -s tests` does
   not recurse into — run it explicitly.
 - `tests/bench/` — `bench.c` + `run_bench.py`: the published overhead
-  numbers. Any claim about ns/hook comes from here or it is not made.
+  numbers. Any claim about ns/hook comes from here or it is not made. The
+  counted rows are skipped, not faked, where the machine has no usable PMU.
 - `docs/` — the published documentation site: hand-built static HTML (no
   generator), one file per page plus `assets/styles.css`, `assets/docs.js`,
   `assets/flamegraph.svg` and `screenshots/`. `docs/architecture.html`

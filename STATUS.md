@@ -33,6 +33,7 @@ starts.
 | Thread-level selection (`TRACE_THREADS`) | ✅ done | `TRACE_THREADS='sort-*'` e2e: 3 of 26 threads traced |
 | Make / CMake integration | ✅ done | both fixtures e2e: `unmatched_exits=0`; normal builds carry zero hooks |
 | Hardware counters per function | ✅ done | exact instructions/cache-misses/branch-misses for named functions; 223.0 instr/call identical across 5 runs where wall time moved 5x; all 28 runtime tests pass on aarch64 |
+| Counter overhead, measured | ✅ done | `tests/bench/run_bench.py` gained counted rows: on aarch64, counting every call of a do-nothing function costs 1970 ns/hook against 98 uncounted — the worst case, and why the guard rail exists |
 | Counter guard rail + honesty checks | ✅ done | refuses a counter that never reaches hardware; demotes functions shorter than ~20x a read and names them; refuses a 4th event rather than let the kernel scale counts |
 | Live view (`callsight ui` → Live) | ✅ done | incremental Accumulator + per-file offsets over SSE; local run or a `callsight serve` directory |
 | Web UI (`callsight ui`) | ✅ done | full API-driven cycle, percentiles and capture notices in the table, interactive flame graph with zoom |
