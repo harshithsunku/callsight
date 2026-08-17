@@ -97,6 +97,14 @@ no chance of catching that one call at all.</p>
   </tbody>
 </table>
 </div>
+<p>When a capture has <a href="counters.html">hardware counters</a>, a second table
+follows with one column per event — a table of its own rather than more columns here,
+because only the functions you selected are counted and the rest would be blank:</p>
+<pre><code>== HARDWARE COUNTERS (instructions) ==
+     calls   instructions/call  function
+       200             4,471.3  handle_request
+      1600               223.0  parse_headers</code></pre>
+
 <div class="note">
   <strong>The percentiles are the thing sampling cannot give you.</strong> A sampling
   profiler estimates where time goes by interrupting periodically; a call that runs rarely
@@ -196,10 +204,27 @@ base_self_ms  new_self_ms        delta    change  function
 <p>Compare like with like: a fixed workload, the same capture limits, and ideally
 <code>--mode summary</code> so neither run is cut short by a budget.</p>
 
+<h3 id="counter-keys">Gate on instructions, not on time</h3>
+<p><code>--key</code> takes any metric in the report, including a
+<a href="counters.html">hardware counter</a>:
+<code>&lt;event&gt;</code>, <code>&lt;event&gt;_per_call</code> or
+<code>&lt;event&gt;_self</code>. That is worth doing because wall time and instruction
+counts are not equally trustworthy. The same two runs, compared both ways:</p>
+<pre><code><span class="p">$</span> callsight diff before.json after.json --key self_ms
+<span class="c"># worst regression: +40.0%   — scheduling noise, not a code change</span>
+
+<span class="p">$</span> callsight diff before.json after.json --key instructions_per_call
+<span class="c"># worst regression:  +1.2%   — the change that actually happened</span></code></pre>
+<p>A threshold loose enough to survive the first column catches nothing; on the second,
+<code>--fail-over 1</code> is a gate that means something. Counter values include a small
+constant instrumentation cost, but it is the same in both builds, so it cancels in a
+comparison — which is exactly the use this is for.</p>
+
 <h2 id="overhead">Correcting for the measurement</h2>
 <p>The runtime measures its own per-hook cost at startup and records it in the trace.
 <code>--subtract-overhead</code> deducts it — the function's own boundary, plus two hooks
-for every instrumented call nested inside the window:</p>
+for every instrumented call nested inside the window. Where a function was counted it also
+deducts its counter reads, two per call at the measured cost:</p>
 <pre><code><span class="p">$</span> callsight analyze traces/ --exe ./yourapp.instr --subtract-overhead</code></pre>
 <p>It is off by default, because the default report should be what was measured rather
 than what was inferred. It matters most for functions with very short bodies and many
@@ -299,6 +324,7 @@ threads must finish) for the last buffers to flush.</p>
     <li><a href="#timeline">A real timeline</a></li>
     <li><a href="#callers">Hot call sites</a></li>
     <li><a href="#regressions">Catching regressions</a></li>
+    <li><a href="#counter-keys">Gate on instructions</a></li>
     <li><a href="#overhead">Overhead correction</a></li>
     <li><a href="#json">JSON output</a></li>
     <li><a href="#workflow">The tightening loop</a></li>

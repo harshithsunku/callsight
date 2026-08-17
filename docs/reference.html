@@ -187,12 +187,34 @@ it works as a build gate:</p>
 <div class="table-scroll">
 <table class="ref">
   <tbody>
-    <tr><td class="nowrap"><code>--key</code></td><td>Metric to compare. Default <code>self_ms</code></td></tr>
+    <tr><td class="nowrap"><code>--key</code></td><td>Metric to compare. Default <code>self_ms</code>. A counter event works too — <code>&lt;event&gt;</code>, <code>&lt;event&gt;_per_call</code> or <code>&lt;event&gt;_self</code> — and is steady enough to gate at 1% where wall time needs 10%</td></tr>
     <tr><td class="nowrap"><code>--threshold</code></td><td>Ignore changes smaller than this, in <code>--key</code> units</td></tr>
     <tr><td class="nowrap"><code>--fail-over</code></td><td>Exit non-zero if any function regresses by more than this percentage</td></tr>
   </tbody>
 </table>
 </div>
+
+<h3 id="cli-counters">counters</h3>
+<pre><code>callsight counters [project] [--config trace.config] --exe BINARY
+                   [--dir traces] [--out FILE] [--list]</code></pre>
+<p>Resolves the config's <code>counter-*</code> directives against a built binary and
+writes the address map the runtime reads. The hooks are handed addresses and the config
+names functions; only the linked binary knows how one becomes the other, so this runs
+after the build. <code>callsight run</code> does it for you on every run — a map is a list
+of addresses, and after a rebuild those point at whatever now occupies them.</p>
+<div class="table-scroll">
+<table class="ref">
+  <tbody>
+    <tr><td class="nowrap"><code>--exe</code></td><td>The instrumented binary; its symbol table is where the addresses come from</td></tr>
+    <tr><td class="nowrap"><code>--dir</code></td><td>Trace directory. The map is written here, where the runtime looks by default</td></tr>
+    <tr><td class="nowrap"><code>--out</code></td><td>Write the map somewhere else instead</td></tr>
+    <tr><td class="nowrap"><code>--list</code></td><td>Print every counted function and its address</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Selection is intersected with what is actually instrumented, so naming a function that
+carries no hooks is reported rather than emitted as an address that never fires. See
+<a href="counters.html">hardware counters</a>.</p>
 
 <h3 id="cli-doctor">doctor</h3>
 <pre><code>callsight doctor [project] [--config trace.config] [--dir traces]</code></pre>
@@ -433,6 +455,7 @@ files the analyzer misreads.</p>
     <li class="sub"><a href="#cli-flags">flags</a></li>
     <li class="sub"><a href="#cli-analyze">analyze</a></li>
     <li class="sub"><a href="#cli-diff">diff</a></li>
+    <li class="sub"><a href="#cli-counters">counters</a></li>
     <li class="sub"><a href="#cli-doctor">doctor</a></li>
     <li class="sub"><a href="#cli-serve">serve · ui · provision</a></li>
     <li><a href="#integrations">Build integrations</a></li>
@@ -440,6 +463,7 @@ files the analyzer misreads.</p>
     <li class="sub"><a href="#cmake">CMake</a></li>
     <li><a href="#env">Environment variables</a></li>
     <li><a href="#formats">File formats</a></li>
+    <li><a href="#portability">Agent portability</a></li>
     <li><a href="#limitations">Known limitations</a></li>
     <li><a href="#links">Project links</a></li>
   </ul>

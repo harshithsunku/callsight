@@ -193,7 +193,10 @@ precisely on the embedded targets that can least afford it. It remains available
 <code>TRACE_CLOCK=raw</code>.</p>
 
 <h3 id="event">The event record</h3>
-<p>32 bytes, fixed layout, little-endian — the same on disk and on the wire.</p>
+<p>32 bytes, fixed layout, the same on disk and on the wire. Integers are in the
+<strong>agent's</strong> byte order — the device is the constrained side of the system and
+the analysis host is not, so the host detects and swaps (see
+<a href="reference.html#portability">agent portability</a>).</p>
 <div class="table-scroll">
 <table class="ref">
   <thead><tr><th>Field</th><th>Type</th><th>Meaning</th></tr></thead>
@@ -202,11 +205,18 @@ precisely on the embedded targets that can least afford it. It remains available
     <tr><td><code>func_addr</code></td><td><code>u64</code></td><td>Address of the entered/exited function (or a marker code)</td></tr>
     <tr><td><code>caller_addr</code></td><td><code>u64</code></td><td>Return address in the caller — the exact call site (or a marker payload)</td></tr>
     <tr><td><code>tid</code></td><td><code>u32</code></td><td>Kernel thread id</td></tr>
-    <tr><td><code>kind</code></td><td><code>u8</code></td><td>0 = enter, 1 = exit, 2 = marker</td></tr>
+    <tr><td><code>kind</code></td><td><code>u8</code></td><td>0 = enter, 1 = exit, 2 = marker, 3 = counter values</td></tr>
     <tr><td><code>_pad</code></td><td><code>u8[3]</code></td><td>Padding to 32 bytes</td></tr>
   </tbody>
 </table>
 </div>
+<p>Kind 3 carries a counted call's <a href="counters.html">hardware counter</a> deltas,
+one per configured event, in the three 64-bit slots — and always immediately after the
+exit it belongs to, so a reader attaches it to the call it just closed without keeping
+state. It is a separate record rather than four more fields on every event: the 32-byte
+grid is what the ring and the wire protocol are built on, and most calls are not counted,
+so widening every event would charge every user for a feature few enable.</p>
+
 <p>Each trace file starts with an 80-byte version 2 header. Its first 16 bytes are laid out
 exactly as version 1 — magic, version, event size — so any reader can identify the file
 before it knows the rest, and a <code>header_size</code> field tells readers where the
@@ -221,6 +231,10 @@ in the two address fields. It is how a capture that ended early says so — budg
 disk full, write failed, segments rotated away — instead of simply looking short. Markers
 cost nothing to carry, travel over the streaming protocol like any other record, and a
 reader that does not recognize one skips it.</p>
+<p>The same mechanism is why counted captures need no format-version bump: the events,
+their costs and any functions the guard rail declined to count are all announced as
+markers at the head of every segment. A rotated capture whose first segment was discarded
+still describes its own counter columns.</p>
 <p>Treating an unknown kind as an exit would corrupt the entire match, so this is one of
 the few places where the format demands that readers be strict.</p>
 

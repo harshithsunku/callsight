@@ -82,8 +82,32 @@ no directives at all, <strong>everything</strong> is instrumented.</p>
       <td class="nowrap"><code>include-func &lt;name&gt; [depth]</code></td>
       <td>Instrument <code>&lt;name&gt;</code> and its whole call subtree, resolved statically from your sources. Optional depth: <code>0</code> = just that function, <code>1</code> = direct callees, default = the full subtree.</td>
     </tr>
+    <tr>
+      <td class="nowrap"><code>counter &lt;events&gt;</code></td>
+      <td>Hardware events to count, comma-separated — at most three. See <a href="counters.html">hardware counters</a>.</td>
+    </tr>
+    <tr>
+      <td class="nowrap"><code>counter-func &lt;name&gt; [depth]</code></td>
+      <td>Count <code>&lt;name&gt;</code>, and optionally its call subtree — the same walk <code>include-func</code> uses. Only instrumented functions can be counted.</td>
+    </tr>
+    <tr>
+      <td class="nowrap"><code>counter-file &lt;pattern&gt;</code></td>
+      <td>Count every instrumented function <em>defined in</em> matching files.</td>
+    </tr>
+    <tr>
+      <td class="nowrap"><code>counter-min auto|&lt;ns&gt;|0</code></td>
+      <td>Skip counting functions shorter than this. <code>auto</code> (the default) derives it from the measured cost of one counter read; <code>0</code> disables the guard.</td>
+    </tr>
   </tbody>
 </table>
+</div>
+
+<div class="note">
+  The first four directives decide what carries <strong>hooks</strong>, which is a
+  compile-time decision and needs a rebuild to change. The <code>counter</code> ones
+  decide what gets <strong>read</strong> from those hooks, which is resolved after the
+  link and needs no rebuild at all — so you can re-point counters at different functions
+  and just run again.
 </div>
 
 <h3 id="patterns">Pattern matching</h3>
@@ -190,7 +214,13 @@ a noisy trace down to a readable one:</p>
 <pre><code><span class="c"># trace.config</span>
 <span class="k">exclude</span> src/utils/rng.c        <span class="c"># RNG helpers dominate call volume: pure noise</span>
 <span class="k">exclude</span> src/signal/fft.h       <span class="c"># header-inline helpers defined in fft.h</span>
-<span class="k">exclude-func</span> crc32_update     <span class="c"># one hot function, by name</span></code></pre>
+<span class="k">exclude-func</span> crc32_update     <span class="c"># one hot function, by name</span>
+
+<span class="c"># Exact instruction counts for the matrix work, and nothing too short</span>
+<span class="c"># to measure honestly.</span>
+<span class="k">counter</span> instructions
+<span class="k">counter-file</span> src/matrix/**
+<span class="k">counter-min</span> auto</code></pre>
 <p>Which becomes, at build time:</p>
 <pre><code>-finstrument-functions
 -finstrument-functions-exclude-file-list=src/utils/rng.c,src/signal/fft.h

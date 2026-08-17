@@ -98,6 +98,25 @@
     <div class="features">
       <div class="feature">
         <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l3-6 4 4 4-8"/></svg>
+        </div>
+        <h3>Numbers that repeat</h3>
+        <p>Hardware counters give exact instructions retired per function. Across five runs
+        of one binary the count did not move while wall time swung five-fold — which is what
+        makes <a href="counters.html"><code>diff --key instructions_per_call</code></a> a
+        gate you can set at 1%.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 21h8M12 18v3"/><path d="M6 12l3-3 3 3 4-5"/></svg>
+        </div>
+        <h3>Runs where your code runs</h3>
+        <p>32-bit and big-endian agents are first class: the device writes its native byte
+        order and the host adapts. ARMv7, PowerPC32 and s390x are cross-built, run under
+        qemu and analyzed on x86 in CI on every push.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h8l-1 8 10-12h-8l1-8z"/></svg>
         </div>
         <h3>Zero source edits</h3>
@@ -435,9 +454,10 @@ events=<span class="n">850059</span> threads=<span class="n">24</span> functions
     <h2>How it compares.</h2>
     <p class="section-sub">
       Reach for <code>perf</code> first when you want a cheap statistical profile of a
-      whole system, kernel time, or hardware counters. Reach for callsight when you need
+      whole system, or kernel and off-CPU time. Reach for callsight when you need
       <em>exactness</em> for code you chose — every call counted, true tail latency per
-      function, and zero cost for everything you did not choose.
+      function, exact instruction counts where you ask for them, and zero cost for
+      everything you did not choose.
     </p>
     <div class="table-scroll">
       <table class="ref">

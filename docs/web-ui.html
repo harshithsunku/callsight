@@ -55,7 +55,7 @@
     <span class="eyebrow">Optional extra</span>
     <h1>Web UI</h1>
     <p>The whole workflow in a browser — browse a project, write the config by ticking
-    boxes, build, run, and read the report. No root, one command.</p>
+    boxes, build, run, and read the report as it arrives. No root, one command.</p>
     <pre style="max-width:520px;margin-top:22px"><code><span class="p">$</span> uv tool install 'callsight[ui]'
 <span class="p">$</span> callsight ui                <span class="c"># http://127.0.0.1:8321</span></code></pre>
   </div>
@@ -117,7 +117,7 @@ CLI.</p>
     either list and tick what you care about.</li>
   <li><strong>Per-function actions</strong> — for each selected function choose
     <em>include-subtree</em> (expands through the static call graph, like
-    <code>include-func</code>) or <em>exclude</em>.</li>
+    <code>include-func</code>), <em>exclude</em>, or <em>count</em>.</li>
   <li><strong>Preview</strong> — writes the generated config, then dry-runs the selection
     against it: how many sources would be instrumented versus excluded with your current
     choices. (The write is required — the dry run reads the saved file.)</li>
@@ -125,6 +125,47 @@ CLI.</p>
     the next instrumented build.</li>
 </ol>
 <p>Both buttons ask before overwriting an existing config whose content differs.</p>
+
+<h3 id="counting">Choosing what to count</h3>
+<p>The <em>Count</em> action selects functions for
+<a href="counters.html">hardware counters</a>. Because a counter read is not free — and on
+arm64 it is a syscall of microseconds — the panel below the panes exists to stop you
+pointing them somewhere useless:</p>
+<ul>
+  <li><strong>A capability banner from the actual machine.</strong> The server opens a real
+    counter and runs a known loop before the panel offers anything. Where the PMU is not
+    exposed — most containers — <em>Count</em> is disabled and says why, rather than
+    letting you configure a run that would report zeros.</li>
+  <li><strong>Event checkboxes</strong>, capped at three. A fourth is refused: past the
+    PMU's registers the kernel time-slices the events and scales the counts, which turns
+    exact numbers into estimates.</li>
+  <li><strong>Each function's median duration</strong> from the last analyzed run, shown on
+    its row. Anything below the floor is dimmed and badged <em>too short</em>.</li>
+  <li><strong>Check selection</strong> resolves the names against the built binary and
+    projects the cost: two reads per counted call, so the previous run's call counts give
+    a real number — <em>“+4.2 ms on a run that took 8000 ms”</em> — before you run rather
+    than after. It also names anything that did not resolve, or that carries no
+    instrumentation hooks and therefore can never be counted.</li>
+</ul>
+
+<h2 id="live">Live tab</h2>
+<p>A report that fills in while the program is still running, instead of after it exits.</p>
+<ul>
+  <li><strong>Run &amp; watch</strong> launches the binary from the UI and reads its trace
+    as it grows.</li>
+  <li><strong>Watch a directory</strong> follows one that something else is filling — a
+    <code>callsight serve</code> receiving from a remote device, which is where this earns
+    its keep: a 32-bit or big-endian board streaming in, symbolized and counted on
+    arrival.</li>
+</ul>
+<p>The header shows elapsed time, thread and function counts and an events-per-second
+sparkline; the table is the current top functions by self time, with
+<a href="counters.html">counter columns</a> alongside when the capture has them. Stop sends
+<code>SIGTERM</code> first, so a clean exit still flushes each thread's buffered tail.</p>
+<p>Each refresh reads only the bytes the trace files have gained since the last one — a
+partial final record is resumed rather than dropped — so the cost is proportional to new
+events, not to the size of the trace. A capture heading for millions of events refreshes
+just as cheaply at the end as at the start.</p>
 
 <h2 id="ctags">Symbol enumeration</h2>
 <p>The builder needs to know what functions a project defines. In order of preference:</p>
@@ -165,6 +206,8 @@ CLI.</p>
   <ul>
     <li><a href="#workflow">Workflow tab</a></li>
     <li><a href="#builder">Config Builder tab</a></li>
+    <li><a href="#counting">Choosing what to count</a></li>
+    <li><a href="#live">Live tab</a></li>
     <li><a href="#ctags">Symbol enumeration</a></li>
     <li><a href="#notes">Notes</a></li>
   </ul>

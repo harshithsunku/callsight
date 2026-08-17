@@ -184,7 +184,9 @@
 <h2 id="protocol">Ring layout and wire protocol</h2>
 <p>Both live in <code>src/callsight/runtime/trace_shm.h</code>
 (<code>TRACE_SHM_VERSION</code> / <code>TRACE_STREAM_VERSION</code> are bumped on any
-layout change). All integers little-endian.</p>
+layout change). Integers are in the <strong>agent's</strong> byte order, not a canonical
+one, and the server detects it from the handshake — see
+<a href="reference.html#portability">agent portability</a>.</p>
 
 <h3 id="ring">Ring header</h3>
 <p><code>trace_shm_header_t</code>, followed by <code>capacity</code> bytes of event
