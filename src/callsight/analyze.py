@@ -49,7 +49,7 @@ class _Layout:
     """
 
     __slots__ = ("endian", "header_v1", "header", "event", "sum_header",
-                 "sum_record")
+                 "sum_record", "sum_header2", "sum_record2")
 
     def __init__(self, endian):
         self.endian = endian
@@ -62,6 +62,12 @@ class _Layout:
         self.event = struct.Struct(endian + "QQQIB3x")
         self.sum_header = struct.Struct(endian + "8sIIIIQQQQQIIQQQ")
         self.sum_record = struct.Struct(endian + "6Q160I")
+        # Summary version 2 appends the hardware-counter fields: counts and
+        # padding, then the 64-bit values. Version 1 files are still read
+        # with the structs above — record_size and header_size say which.
+        self.sum_header2 = struct.Struct(
+            endian + "8sIIIIQQQQQIIQQQ" + "IIIIII" + "QQQQQQQQQ")
+        self.sum_record2 = struct.Struct(endian + "6Q160I" + "7Q")
 
 
 LE = _Layout("<")
@@ -103,7 +109,7 @@ def byte_order(head):
 
 VERSION = 2  # TRACE_FILE_VERSION in runtime/trace.h
 
-ENTER, EXIT, MARKER = 0, 1, 2
+ENTER, EXIT, MARKER, COUNTER = 0, 1, 2, 3
 
 HF_TICKS = 0x1
 HF_WRAPPED = 0x2
@@ -112,6 +118,7 @@ HF_BIGENDIAN = 0x4
 # Marker codes; see TRACE_MARK_* in runtime/trace.h.
 MARK_BUDGET, MARK_NOSPACE, MARK_WRITE_ERR = 1, 2, 3
 MARK_MAXEVENTS, MARK_WRAP, MARK_CLOCK = 4, 5, 6
+MARK_CEVENT, MARK_CCOST, MARK_CREAD, MARK_CSKIP, MARK_CMUX = 7, 8, 9, 10, 11
 
 HIST_BUCKETS = 160
 
@@ -150,7 +157,9 @@ def read_header(path):
     meta = {"path": path, "version": version, "flags": 0, "load_bias": 0,
             "tick_hz": 0, "t0_ticks": 0, "t0_ns": 0, "hook_ns": 0,
             "pid": 0, "seq": 0, "header_size": lay.header_v1.size,
-            "layout": lay, "big_endian": lay is BE}
+            "layout": lay, "big_endian": lay is BE,
+            # Filled in from the in-band markers as the file is read.
+            "counters": [], "counter_self": [0, 0, 0], "counter_read_ns": 0}
     if version == 1:
         return meta
     if version != VERSION:
@@ -209,6 +218,51 @@ def _ns_per_tick(meta):
         f"TRACE_CLOCK=mono")
 
 
+def counter_event_name(ptype, pconfig):
+    """Label a counter column from the perf numbers the capture recorded.
+
+    The runtime never learns event names — the host resolves them into
+    (type, config) when it writes the counter map — so the name has to come
+    back from the same table on the way out."""
+    from callsight import flags
+    for name, (t, c) in flags.COUNTER_EVENTS.items():
+        if t == ptype and c == pconfig:
+            return name
+    if ptype == flags.PERF_TYPE_RAW:
+        return f"r{pconfig:x}"
+    return f"event:{ptype}:{pconfig}"
+
+
+_COUNTER_MARKS = (MARK_CEVENT, MARK_CCOST, MARK_CREAD, MARK_CSKIP,
+                  MARK_CMUX)
+
+
+def _counter_marker(meta, code, ts, payload):
+    """Fold a counter-setup marker into the file's metadata.
+
+    Event files describe their own counter columns in band, at the head of
+    every segment, rather than in the header — markers are already defined as
+    notes a reader may skip, so this needed no format-version bump, and a
+    rotated capture whose first segment was discarded still describes itself.
+    """
+    meta.setdefault("counters", [])
+    meta.setdefault("counter_self", [0, 0, 0])
+    if code == MARK_CEVENT:
+        slot, ptype = ts >> 32, ts & 0xFFFFFFFF
+        while len(meta["counters"]) <= slot:
+            meta["counters"].append(None)
+        meta["counters"][slot] = (ptype, payload)
+    elif code == MARK_CCOST:
+        if ts < 3:
+            meta["counter_self"][ts] = payload
+    elif code == MARK_CREAD:
+        meta["counter_read_ns"] = payload
+    elif code == MARK_CSKIP:
+        meta.setdefault("counter_skipped", []).append((ts, payload))
+    elif code == MARK_CMUX:
+        meta["counter_mux"] = max(meta.get("counter_mux", 0), payload)
+
+
 MARK_NAMES = {
     MARK_BUDGET: "budget",
     MARK_NOSPACE: "nospace",
@@ -225,7 +279,12 @@ def read_events(path, meta=None, notices=None):
     subtracted) and timestamps as nanoseconds, so files from different
     processes and different clock sources are directly comparable. Marker
     records are appended to `notices` rather than yielded — a reader that
-    mistook one for an exit would corrupt the whole match."""
+    mistook one for an exit would corrupt the whole match.
+
+    Counter records (kind COUNTER) are yielded with the three raw per-event
+    deltas in the func/ts/caller slots, in slot order and untouched: they are
+    counts, so neither the load bias nor the clock scale applies to them.
+    They always follow the EXIT of the call they belong to."""
     if meta is None:
         meta = read_header(path)
         if meta is None:
@@ -253,10 +312,20 @@ def read_events(path, meta=None, notices=None):
             usable = len(chunk) - len(chunk) % event.size
             for ts, func, caller, tid, kind in event.iter_unpack(chunk[:usable]):
                 if kind == MARKER:
-                    if func != MARK_CLOCK:
+                    if func in _COUNTER_MARKS:
+                        _counter_marker(meta, func, ts, caller)
+                    elif func != MARK_CLOCK:
                         notices.append({"kind": MARK_NAMES.get(func, str(func)),
                                         "payload": caller,
                                         "file": os.path.basename(str(path))})
+                    continue
+                if kind == COUNTER:
+                    # The record's ts/func/caller fields are value slots 0,
+                    # 1 and 2 — counts, so neither the load bias nor the
+                    # clock scale applies. They are yielded in slot order,
+                    # which is NOT the order of the fields they came from:
+                    # feed()'s third positional argument is slot 0.
+                    yield tid, COUNTER, ts, func, caller
                     continue
                 if scale is not None:
                     ts = t0_ns + int((ts - t0_ticks) * scale)
@@ -275,7 +344,8 @@ def read_summary(path):
     """Parse a summary file written by TRACE_MODE=summary.
 
     Returns (meta, [record dicts]) with times already in nanoseconds, or
-    (None, []) when the file is unreadable."""
+    (None, []) when the file is unreadable. Version 1 and version 2 files
+    both read; version 2 adds the hardware-counter fields."""
     with open(path, "rb") as f:
         head = f.read(SUM_HEADER.size)
         if len(head) < SUM_HEADER.size or head[:8] != SUM_MAGIC:
@@ -286,7 +356,13 @@ def read_summary(path):
         (_m, version, record_size, header_size, flags, load_bias, tick_hz,
          t0_ticks, t0_ns, hook_ns, pid, tid, records, span,
          truncated) = lay.sum_header.unpack(head)
-        if version != 1 or record_size != SUM_RECORD.size:
+        if version not in (1, 2):
+            print(f"warning: {path}: summary format version {version} is "
+                  f"newer than this callsight understands, skipped",
+                  file=sys.stderr)
+            return None, []
+        rec_struct = lay.sum_record if version == 1 else lay.sum_record2
+        if record_size != rec_struct.size:
             print(f"warning: {path}: unsupported summary layout "
                   f"(version {version}, record {record_size}), skipped",
                   file=sys.stderr)
@@ -296,7 +372,20 @@ def read_summary(path):
                 "t0_ticks": t0_ticks, "t0_ns": t0_ns, "hook_ns": hook_ns,
                 "pid": pid, "tid": tid, "truncated": truncated,
                 "header_size": header_size,
-                "layout": lay, "big_endian": lay is BE}
+                "layout": lay, "big_endian": lay is BE,
+                "counters": [], "counter_self": [], "counter_read_ns": 0,
+                "counter_skipped": 0, "counter_mux": 0}
+        if version >= 2 and header_size >= lay.sum_header2.size:
+            f.seek(0)
+            head2 = f.read(lay.sum_header2.size)
+            v = lay.sum_header2.unpack(head2)
+            n = min(v[15], 3)          # counter_n
+            types, configs = v[17:20], v[21:24]
+            meta["counters"] = [(types[i], configs[i]) for i in range(n)]
+            meta["counter_self"] = list(v[24:27])[:n]
+            meta["counter_read_ns"] = v[27]
+            meta["counter_skipped"] = v[28]
+            meta["counter_mux"] = v[29]
         # No closing anchor in a summary file: the header rate is all there
         # is, and it is measured on the same hardware, so it is close.
         scale = 1.0 if not (flags & HF_TICKS) else (
@@ -305,17 +394,26 @@ def read_summary(path):
 
         f.seek(header_size)
         out = []
+        ncounters = len(meta["counters"])
         for _ in range(records):
-            raw = f.read(lay.sum_record.size)
-            if len(raw) < lay.sum_record.size:
+            raw = f.read(rec_struct.size)
+            if len(raw) < rec_struct.size:
                 break
-            vals = lay.sum_record.unpack(raw)
-            out.append({
+            vals = rec_struct.unpack(raw)
+            rec = {
                 "func": vals[0] - load_bias, "calls": vals[1],
                 "incl": int(vals[2] * scale), "self": int(vals[3] * scale),
                 "min": int(vals[4] * scale), "max": int(vals[5] * scale),
-                "hist": list(vals[6:]), "scale": scale,
-            })
+                "hist": list(vals[6:6 + HIST_BUCKETS]), "scale": scale,
+                "counter_calls": 0, "counter_incl": [], "counter_self": [],
+            }
+            if version >= 2:
+                tail = vals[6 + HIST_BUCKETS:]
+                rec["counter_calls"] = tail[0]
+                # Counter values are counts, not durations: no clock scaling.
+                rec["counter_incl"] = list(tail[1:4])[:ncounters]
+                rec["counter_self"] = list(tail[4:7])[:ncounters]
+            out.append(rec)
     return meta, out
 
 
@@ -385,6 +483,12 @@ class Accumulator:
         self.child_calls = defaultdict(int)  # direct nested calls, for
         self.desc_calls = defaultdict(int)   # overhead compensation
         self.stacks = defaultdict(list)
+        # Hardware counters, when the capture has any. Populated from the
+        # COUNTER record that follows each counted call's EXIT.
+        self.counter_calls = defaultdict(int)
+        self.counter_incl = defaultdict(lambda: [0, 0, 0])
+        self.counter_self = defaultdict(lambda: [0, 0, 0])
+        self._closed = {}       # tid -> (func, its children's counter totals)
         self.unmatched_exits = 0
         self.events = 0
         self.first_ts = {}
@@ -396,6 +500,11 @@ class Accumulator:
         self.on_complete = on_complete
 
     def feed(self, tid, kind, func, ts, caller=0):
+        if kind == COUNTER:
+            # func/ts/caller are the three per-event deltas, in slot order.
+            self._counters(tid, (func, ts, caller))
+            return
+
         self.events += 1
         self.first_ts.setdefault(tid, ts)
         self.last_ts[tid] = ts
@@ -404,8 +513,9 @@ class Accumulator:
 
         st = self.stacks[tid]
         if kind == ENTER:
-            # [func, enter_ts, child_ns, call_site, n_children, n_descendants]
-            st.append([func, ts, 0, caller, 0, 0])
+            # [func, enter_ts, child_ns, call_site, n_children, n_descendants,
+            #  child counter totals]
+            st.append([func, ts, 0, caller, 0, 0, [0, 0, 0]])
             return
 
         # find nearest unmatched enter for this function
@@ -416,7 +526,8 @@ class Accumulator:
             return
         # close any dangling frames above (e.g. after longjmp/truncation)
         del st[idx + 1:]
-        f, enter_ts, child_ns, call_site, nchild, ndesc = st.pop()
+        f, enter_ts, child_ns, call_site, nchild, ndesc, cchild = st.pop()
+        self._closed[tid] = (f, cchild)
         dur = ts - enter_ts
         self.calls[f] += 1
         self.incl[f] += dur
@@ -447,6 +558,27 @@ class Accumulator:
             st[-1][2] += dur
             st[-1][4] += 1
             st[-1][5] += 1 + ndesc
+
+    def _counters(self, tid, vals):
+        """Attach a counted call's values to the call that just closed.
+
+        The record always follows its own EXIT, so the frame is already
+        popped — which is convenient rather than awkward: the top of the
+        stack is now the parent, and that is exactly who needs to know what
+        this child cost so its own numbers can be made exclusive.
+        """
+        closed = self._closed.get(tid)
+        if closed is None:
+            return
+        f, child = closed
+        self.counter_calls[f] += 1
+        for i in range(3):
+            self.counter_incl[f][i] += vals[i]
+            self.counter_self[f][i] += vals[i] - child[i]
+        st = self.stacks[tid]
+        if st:
+            for i in range(3):
+                st[-1][6][i] += vals[i]
 
     def finish(self):
         """Return (stats, threads, unmatched_exits, open_frames)."""
@@ -566,6 +698,33 @@ def _open_metas(files):
     return metas
 
 
+def _counter_notices(event_names, read_ns, skipped, mux, counted_rows,
+                     subtract_overhead):
+    """What a counted capture has to admit about itself."""
+    out = []
+    if not event_names:
+        return out
+    out.append(f"hardware counters: {', '.join(event_names)} on "
+               f"{counted_rows} function(s); each value includes a small "
+               f"constant instrumentation cost (the hook code between the "
+               f"two readings), which is why comparing builds is exact but "
+               f"comparing against a non-instrumented run is not")
+    if skipped:
+        out.append(f"{skipped} selected function(s) were skipped as too "
+                   f"short to measure — at ~{read_ns} ns per counter read, "
+                   f"counting them would report the instrument rather than "
+                   f"the code (counter-min overrides this)")
+    if mux:
+        out.append(f"{mux} counter read(s) happened while the PMU was "
+                   f"time-slicing, so those values are scaled estimates "
+                   f"rather than exact counts — request fewer events")
+    if read_ns and not subtract_overhead:
+        out.append(f"counted functions paid 2 x {read_ns} ns per call for "
+                   f"their counter reads, which is included in their times "
+                   f"here; --subtract-overhead removes it")
+    return out
+
+
 def _describe_notices(notices, metas):
     """Fold raw marker records into one line each, in report order."""
     out = []
@@ -650,20 +809,38 @@ def collect(tracedir, exe, folded=False, callers=False, addr2line=None,
 
     hook_ns = max((m["hook_ns"] for m in metas), default=0)
     span_ns = max(t[1] for t in threads.values()) - min(t[0] for t in threads.values())
+
+    events = next((m["counters"] for m in metas if m.get("counters")), [])
+    event_names = [counter_event_name(t, c) for t, c in events if c is not None
+                   or t is not None]
+    read_ns = max((m.get("counter_read_ns", 0) for m in metas), default=0)
+
     rows = []
     for func, (calls, incl, self_t, max_t) in stats.items():
         fn, loc = names.get(func, ("??", "??:0"))
         hist = acc.hist[func]
+        counted = acc.counter_calls.get(func, 0)
         if subtract_overhead and hook_ns:
             incl = max(0, incl - (calls + 2 * acc.desc_calls[func]) * hook_ns)
             self_t = max(0, self_t - (calls + 2 * acc.child_calls[func]) * hook_ns)
-        rows.append({"function": fn, "location": loc, "calls": calls,
-                     "incl_ms": incl / 1e6, "self_ms": self_t / 1e6,
-                     "max_ms": max_t / 1e6,
-                     "min_ns": acc.min_t.get(func, 0), "max_ns": max_t,
-                     "p50_ns": percentile(hist, calls, 0.50),
-                     "p90_ns": percentile(hist, calls, 0.90),
-                     "p99_ns": percentile(hist, calls, 0.99)})
+        if subtract_overhead and counted and read_ns:
+            incl = max(0, incl - counted * 2 * read_ns)
+            self_t = max(0, self_t - counted * 2 * read_ns)
+        row = {"function": fn, "location": loc, "calls": calls,
+               "incl_ms": incl / 1e6, "self_ms": self_t / 1e6,
+               "max_ms": max_t / 1e6,
+               "min_ns": acc.min_t.get(func, 0), "max_ns": max_t,
+               "p50_ns": percentile(hist, calls, 0.50),
+               "p90_ns": percentile(hist, calls, 0.90),
+               "p99_ns": percentile(hist, calls, 0.99)}
+        if counted and event_names:
+            row["counters"] = {
+                name: {"calls": counted,
+                       "total": acc.counter_incl[func][i],
+                       "self": acc.counter_self[func][i],
+                       "per_call": acc.counter_incl[func][i] / counted}
+                for i, name in enumerate(event_names)}
+        rows.append(row)
     per_thread = [{"tid": tid, "events": acc.per_tid[tid],
                    "span_ms": (threads[tid][1] - threads[tid][0]) / 1e6}
                   for tid in sorted(acc.per_tid)]
@@ -672,7 +849,16 @@ def collect(tracedir, exe, folded=False, callers=False, addr2line=None,
             "unmatched_exits": unmatched, "unclosed_enters": open_frames,
             "mode": "events", "hook_ns": hook_ns,
             "overhead_subtracted": bool(subtract_overhead and hook_ns),
-            "notices": _describe_notices(notices, metas),
+            "counter_events": event_names, "counter_read_ns": read_ns,
+            "notices": _describe_notices(notices, metas)
+                       + _counter_notices(
+                           event_names, read_ns,
+                           len({a for m in metas
+                                for a, _d in m.get("counter_skipped", [])}),
+                           max((m.get("counter_mux", 0) for m in metas),
+                               default=0),
+                           sum(1 for r in rows if "counters" in r),
+                           subtract_overhead),
             "pids": sorted({m["pid"] for m in metas if m["pid"]}),
             "rows": rows, "per_thread": per_thread}
     if folded:
@@ -718,6 +904,13 @@ def _collect_summary(files, exe, addr2line, subtract_overhead):
             cur["max"] = max(cur["max"], rec["max"])
             cur["min"] = min(cur["min"] or rec["min"], rec["min"])
             cur["hist"] = [a + b for a, b in zip(cur["hist"], rec["hist"])]
+            cur["counter_calls"] += rec["counter_calls"]
+            cur["counter_incl"] = [a + b for a, b in
+                                   zip(cur["counter_incl"],
+                                       rec["counter_incl"])]
+            cur["counter_self"] = [a + b for a, b in
+                                   zip(cur["counter_self"],
+                                       rec["counter_self"])]
     if not merged:
         raise RuntimeError("summary files contained no records")
 
@@ -725,29 +918,54 @@ def _collect_summary(files, exe, addr2line, subtract_overhead):
     _warn_if_unresolved(names, exe, metas)
     hook_ns = max((m["hook_ns"] for m in metas), default=0)
 
+    events = next((m["counters"] for m in metas if m["counters"]), [])
+    event_names = [counter_event_name(t, c) for t, c in events]
+    read_ns = max((m["counter_read_ns"] for m in metas), default=0)
+
     rows = []
     calls_total = 0
     for func, rec in merged.items():
         fn, loc = names.get(func, ("??", "??:0"))
         calls_total += rec["calls"]
         incl, self_t = rec["incl"], rec["self"]
+        counted = rec["counter_calls"]
         if subtract_overhead and hook_ns:
             incl = max(0, incl - rec["calls"] * hook_ns)
             self_t = max(0, self_t - rec["calls"] * hook_ns)
+        if subtract_overhead and counted and read_ns:
+            # Two reads per counted call, both inside this function's timed
+            # window. Exact bookkeeping over a count we have, not a guess.
+            incl = max(0, incl - counted * 2 * read_ns)
+            self_t = max(0, self_t - counted * 2 * read_ns)
         scale = rec["scale"]
-        rows.append({"function": fn, "location": loc, "calls": rec["calls"],
-                     "incl_ms": incl / 1e6, "self_ms": self_t / 1e6,
-                     "max_ms": rec["max"] / 1e6,
-                     "min_ns": rec["min"], "max_ns": rec["max"],
-                     "p50_ns": int(percentile(rec["hist"], rec["calls"], 0.50) * scale),
-                     "p90_ns": int(percentile(rec["hist"], rec["calls"], 0.90) * scale),
-                     "p99_ns": int(percentile(rec["hist"], rec["calls"], 0.99) * scale)})
+        row = {"function": fn, "location": loc, "calls": rec["calls"],
+               "incl_ms": incl / 1e6, "self_ms": self_t / 1e6,
+               "max_ms": rec["max"] / 1e6,
+               "min_ns": rec["min"], "max_ns": rec["max"],
+               "p50_ns": int(percentile(rec["hist"], rec["calls"], 0.50) * scale),
+               "p90_ns": int(percentile(rec["hist"], rec["calls"], 0.90) * scale),
+               "p99_ns": int(percentile(rec["hist"], rec["calls"], 0.99) * scale)}
+        if counted and event_names:
+            row["counters"] = {
+                name: {"calls": counted,
+                       "total": rec["counter_incl"][i],
+                       "self": rec["counter_self"][i],
+                       "per_call": rec["counter_incl"][i] / counted}
+                for i, name in enumerate(event_names)
+                if i < len(rec["counter_incl"])}
+        rows.append(row)
     notices = []
     if truncated:
         notices.append(f"{truncated} calls were nested deeper than the "
                        f"shadow stack and are not counted")
     if any(m.get("big_endian") for m in metas):
         notices.append("recorded by a big-endian agent; byte-swapped on read")
+    notices.extend(_counter_notices(
+        event_names, read_ns,
+        max((m["counter_skipped"] for m in metas), default=0),
+        max((m["counter_mux"] for m in metas), default=0),
+        sum(r.get("counters", {}) != {} for r in rows),
+        subtract_overhead))
     per_thread = [{"tid": m["tid"], "events": 0, "span_ms": m["span"] / 1e6}
                   for m in sorted(metas, key=lambda m: m["tid"])]
     return {"events": calls_total * 2, "threads": len(metas),
@@ -755,6 +973,7 @@ def _collect_summary(files, exe, addr2line, subtract_overhead):
             "unmatched_exits": 0, "unclosed_enters": 0,
             "mode": "summary", "hook_ns": hook_ns,
             "overhead_subtracted": bool(subtract_overhead and hook_ns),
+            "counter_events": event_names, "counter_read_ns": read_ns,
             "notices": notices,
             "pids": sorted({m["pid"] for m in metas if m["pid"]}),
             "rows": rows, "per_thread": per_thread}

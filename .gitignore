@@ -11,3 +11,4 @@ core.*
 traces/
 bin/
 build*/
+*.o

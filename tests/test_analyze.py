@@ -536,8 +536,21 @@ class TestSummaryTraces(TraceDirFixture):
         self.assertIsNone(meta)
         self.assertIn("bad or missing summary header", err.getvalue())
 
-    def test_unsupported_layout_skipped(self):
+    def test_future_version_skipped(self):
         path = self.write_summary("trace.summary.1.1.bin", [], version=99)
+        err = io.StringIO()
+        with redirect_stderr(err):
+            meta, _r = analyze.read_summary(path)
+        self.assertIsNone(meta)
+        self.assertIn("newer than this callsight understands",
+                      err.getvalue())
+
+    def test_record_size_mismatch_skipped(self):
+        """A known version whose records are not the size that version
+        declares: the file was written by something that disagrees with us
+        about the layout, and reading it would produce garbage."""
+        path = self.write_summary("trace.summary.1.1.bin", [], version=1,
+                                  record_size=analyze.SUM_RECORD.size + 8)
         err = io.StringIO()
         with redirect_stderr(err):
             meta, _r = analyze.read_summary(path)

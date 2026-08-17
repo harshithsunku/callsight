@@ -130,6 +130,19 @@ TRACE_ASSERT_SIZE(trace_event_t, 32);
 #define TRACE_EVENT_ENTER  0u
 #define TRACE_EVENT_EXIT   1u
 /*
+ * Hardware counter values for the call whose EXIT record this immediately
+ * follows. The three 64-bit slots carry one delta per configured event, in
+ * the order the TRACE_MARK_CEVENT markers declared them; unused slots are
+ * zero. Deltas already have the instrumentation's own footprint subtracted.
+ *
+ * Written as its own record rather than by widening trace_event_t: the
+ * 32-byte grid is what every reader, the shm ring and the wire protocol are
+ * built on, and most calls are not counted, so widening every event to
+ * carry three usually-empty fields would cost every user for a feature few
+ * enable.
+ */
+#define TRACE_EVENT_COUNTER 3u
+/*
  * Marker: an in-band note from the runtime to the analyzer, so a capture
  * that was cut short says so instead of just looking short. func_addr holds
  * a TRACE_MARK_* code and caller_addr its payload. Readers that do not
@@ -143,11 +156,37 @@ TRACE_ASSERT_SIZE(trace_event_t, 32);
 #define TRACE_MARK_MAXEVENTS 4u /* stopped: TRACE_MAX reached */
 #define TRACE_MARK_WRAP      5u /* rotated away a segment; payload = events lost */
 #define TRACE_MARK_CLOCK     6u /* exit clock anchor: ts = ticks, payload = ns */
+/*
+ * Counter setup, written at the head of every segment so an event file
+ * describes its own counter columns without a format-version bump — and so
+ * a rotated capture whose first segment was discarded still describes
+ * itself. As with every marker, func_addr is the code and caller_addr the
+ * payload; `ts` carries whatever else each one needs.
+ *
+ *   CEVENT: ts = (slot << 32) | perf type,  payload = perf config
+ *   CCOST:  ts = slot,  payload = the hooks' own count for that event,
+ *           already subtracted from every value reported
+ *   CREAD:  ts = 0,     payload = measured cost of one read, in nanoseconds
+ *   CSKIP:  ts = the function's address,  payload = its mean duration in
+ *           the capture's time unit — selected, but too short to measure
+ *   CMUX:   ts = 0,     payload = reads taken while the PMU was time-slicing
+ */
+#define TRACE_MARK_CEVENT    7u
+#define TRACE_MARK_CCOST     8u
+#define TRACE_MARK_CREAD     9u
+#define TRACE_MARK_CSKIP    10u
+#define TRACE_MARK_CMUX     11u
 
 /* --- Summary mode (TRACE_MODE=summary) --- */
 
 #define TRACE_SUM_MAGIC   "MLSUMRY\0"
-#define TRACE_SUM_VERSION 1u
+/* Version 2 adds the hardware-counter fields. Readers gate on header_size
+ * and record_size, so a version 1 summary still analyzes. */
+#define TRACE_SUM_VERSION 2u
+
+/* Counter events per capture; matches TRACE_PMU_MAX_EVENTS and
+ * COUNTER_MAX_EVENTS in flags.py. */
+#define TRACE_COUNTER_MAX 3u
 
 /*
  * Duration histogram: four sub-buckets per octave (worst case ~19% width,
@@ -173,8 +212,19 @@ typedef struct {
     uint64_t records;     /* number of records that follow */
     uint64_t span;        /* last minus first timestamp seen on this thread */
     uint64_t truncated;   /* calls dropped past the shadow-stack depth limit */
+    /* --- version 2: hardware counters (all zero when none were used) --- */
+    uint32_t counter_n;               /* events configured, 0 = none */
+    uint32_t _pad0;
+    uint32_t counter_type[TRACE_COUNTER_MAX];    /* perf_event_attr.type */
+    uint32_t _pad1;
+    uint64_t counter_config[TRACE_COUNTER_MAX];  /* perf_event_attr.config */
+    uint64_t counter_self[TRACE_COUNTER_MAX];    /* the hooks' own count,
+                                                  * already subtracted */
+    uint64_t counter_read_ns;         /* measured cost of one read */
+    uint64_t counter_skipped;         /* calls not counted: too short */
+    uint64_t counter_mux;             /* reads taken while multiplexing */
 } trace_sum_header_t;
-TRACE_ASSERT_SIZE(trace_sum_header_t, 96);
+TRACE_ASSERT_SIZE(trace_sum_header_t, 192);
 
 typedef struct {
     uint64_t func_addr;
@@ -184,8 +234,14 @@ typedef struct {
     uint64_t min;
     uint64_t max;
     uint32_t hist[TRACE_HIST_BUCKETS];
+    /* --- version 2 --- */
+    uint64_t counter_calls;                   /* calls that got a sample;
+                                               * differs from `calls` when a
+                                               * function was demoted */
+    uint64_t counter_incl[TRACE_COUNTER_MAX]; /* inclusive, per event */
+    uint64_t counter_self[TRACE_COUNTER_MAX]; /* minus counted callees */
 } trace_sum_record_t;
-TRACE_ASSERT_SIZE(trace_sum_record_t, 688);
+TRACE_ASSERT_SIZE(trace_sum_record_t, 744);
 
 /* Compiler-inserted hooks (called for every instrumented function) */
 void __cyg_profile_func_enter(void *this_fn, void *call_site)

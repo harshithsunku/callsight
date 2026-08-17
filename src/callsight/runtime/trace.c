@@ -71,6 +71,7 @@
 #endif
 
 #include "trace.h"
+#include "trace_pmu.h"
 #include "trace_shm.h"
 
 #include <errno.h>
@@ -149,6 +150,57 @@ static uint64_t        g_t0_ns = 0;
 static uint64_t        g_load_bias = 0;
 static uint64_t        g_hook_ns = 0;
 
+/* --- Hardware counters (TRACE_COUNTERS) --- */
+
+/*
+ * Which functions get counters is decided by the host and delivered as a
+ * list of addresses, because the hooks only ever see an address. Everything
+ * here is written once at init and read-only afterwards, except the
+ * per-function demotion state below.
+ */
+static unsigned g_pmu_n = 0;                 /* events configured */
+static uint32_t g_pmu_type[TRACE_COUNTER_MAX];
+static uint64_t g_pmu_config[TRACE_COUNTER_MAX];
+static uint64_t g_pmu_self[TRACE_COUNTER_MAX];  /* the hooks' own count */
+static uint64_t g_pmu_read_ns = 0;
+static uint64_t g_pmu_floor_ns = 0;  /* the guard rail, in nanoseconds */
+static int      g_pmu_floor_auto = 1;/* derive it from the read cost */
+static uint64_t g_pmu_floor = 0;     /* the same, in the capture's time
+                                      * unit, so the hot path just compares */
+static atomic_uint_fast64_t g_pmu_skipped = 0;
+static atomic_uint_fast64_t g_pmu_mux = 0;
+
+/*
+ * The selected set: open-addressed, power-of-two, never resized.
+ *
+ * `calls`/`dur` exist only for the guard rail and stop being touched once a
+ * function's fate is decided, so the steady state costs one load and one
+ * compare. The writes race benignly between threads: every thread is
+ * computing the same verdict from the same kind of evidence, and the verdict
+ * is idempotent.
+ */
+typedef struct {
+    uint64_t              addr;    /* runtime address, load bias applied */
+    atomic_uint_fast64_t  calls;   /* samples used to judge it */
+    atomic_uint_fast64_t  dur;     /* summed duration of those samples */
+    atomic_int            demoted; /* 1 = too short to measure; stop reading */
+} trace_sel_t;
+
+static trace_sel_t *g_sel = NULL;
+static uint32_t     g_sel_mask = 0;     /* slots - 1 */
+static uint32_t     g_sel_count = 0;
+
+/* Samples to gather before judging a function too short to be worth
+ * counting. Small enough to stop wasting reads quickly, large enough not to
+ * demote something on a cold first call. */
+#define TRACE_PMU_JUDGE_AFTER 64u
+/* A call must be this many times the cost of the reads it pays for, or the
+ * measurement says more about the instrument than about the code. */
+#define TRACE_PMU_FLOOR_RATIO 20u
+/* Counted calls nested this deep are not counted. Counter selections are
+ * small and shallow by design; going deeper is reported, not guessed at. */
+#define TRACE_PMU_DEPTH 32u
+
 /* --- Per-thread state --- */
 
 typedef struct trace_seg {
@@ -163,6 +215,21 @@ typedef struct {
     uint64_t child;   /* time already attributed to callees */
 } trace_frame_t;
 
+/*
+ * Shadow stack for counted calls only, used by both modes.
+ *
+ * Separate from trace_frame_t because event mode has no shadow stack at all
+ * and should not grow one for every call just because a handful are counted:
+ * this pushes only when a selected function is entered.
+ */
+typedef struct {
+    uint64_t fn;
+    uint64_t t0;                        /* for the guard rail's duration */
+    uint64_t in[TRACE_COUNTER_MAX];     /* counter values at entry */
+    uint64_t child[TRACE_COUNTER_MAX];  /* counted by nested counted calls */
+    uint32_t reads;                     /* reads made inside this call */
+} trace_cframe_t;
+
 typedef struct {
     uint64_t addr;
     uint64_t calls;
@@ -171,6 +238,9 @@ typedef struct {
     uint64_t min;
     uint64_t max;
     uint32_t hist[TRACE_HIST_BUCKETS];
+    uint64_t counter_calls;
+    uint64_t counter_incl[TRACE_COUNTER_MAX];
+    uint64_t counter_self[TRACE_COUNTER_MAX];
 } trace_sum_entry_t;
 
 typedef struct {
@@ -200,9 +270,23 @@ typedef struct {
     uint32_t       tab_count;
     uint64_t       first_ts;
     uint64_t       last_ts;
+
+    trace_pmu_t     pmu;                          /* this thread's counters */
+    int             pmu_ready;                    /* group opened and usable */
+    trace_cframe_t  cstack[TRACE_PMU_DEPTH];      /* counted calls in flight */
+    uint32_t        cdepth;
 } trace_tls_t;
 
 static __thread trace_tls_t *tl_trace = NULL;
+
+/* Counter hooks live down with the rest of the hot path, but the output and
+ * lifecycle code above needs them. */
+NOINSTR static void trace_counter_markers(trace_tls_t *tls);
+NOINSTR static void trace_counter_enter(trace_tls_t *tls, uint64_t fn,
+                                        uint64_t now);
+NOINSTR static int trace_counter_exit(trace_tls_t *tls, uint64_t fn,
+                                      uint64_t now, uint64_t *incl,
+                                      uint64_t *child);
 
 /* --- Time --- */
 
@@ -446,6 +530,7 @@ NOINSTR static int trace_open_segment(trace_tls_t *tls) {
     tls->seg_bytes = sizeof(hdr);
     tls->seq++;
     atomic_fetch_add(&g_bytes, (uint_fast64_t)sizeof(hdr));
+    trace_counter_markers(tls);
     return 1;
 }
 
@@ -461,14 +546,14 @@ NOINSTR static void trace_free_segs(trace_tls_t *tls) {
 
 /* Emit a marker straight to the segment, bypassing the buffer: markers are
  * rare and must survive even when the buffer has just been flushed. */
-NOINSTR static void trace_marker(trace_tls_t *tls, uint64_t code,
-                                 uint64_t payload) {
+NOINSTR static void trace_marker_at(trace_tls_t *tls, uint64_t ts,
+                                    uint64_t code, uint64_t payload) {
     trace_event_t ev;
 
     if (tls->discard)
         return;
     memset(&ev, 0, sizeof(ev));
-    ev.ts_ns = trace_now();
+    ev.ts_ns = ts;
     ev.func_addr = code;
     ev.caller_addr = payload;
     ev.tid = tls->tid;
@@ -489,6 +574,33 @@ NOINSTR static void trace_marker(trace_tls_t *tls, uint64_t code,
         if (tls->segs_tail)
             tls->segs_tail->bytes += sizeof(ev);
     }
+}
+
+NOINSTR static void trace_marker(trace_tls_t *tls, uint64_t code,
+                                 uint64_t payload) {
+    trace_marker_at(tls, trace_now(), code, payload);
+}
+
+/*
+ * Describe this capture's counter columns, in band.
+ *
+ * Written at the head of every segment rather than in the file header: the
+ * header is version 2 and readers of it are in the wild, whereas markers are
+ * already defined as notes from the runtime that a reader may skip. It also
+ * means a rotated capture whose first segment was discarded still describes
+ * itself, and streaming gets it for free.
+ */
+NOINSTR static void trace_counter_markers(trace_tls_t *tls) {
+    unsigned i;
+
+    if (g_pmu_n == 0 || g_mode != TRACE_MODE_EVENTS)
+        return;
+    for (i = 0; i < g_pmu_n; i++) {
+        trace_marker_at(tls, ((uint64_t)i << 32) | g_pmu_type[i],
+                        TRACE_MARK_CEVENT, g_pmu_config[i]);
+        trace_marker_at(tls, i, TRACE_MARK_CCOST, g_pmu_self[i]);
+    }
+    trace_marker_at(tls, 0, TRACE_MARK_CREAD, g_pmu_read_ns);
 }
 
 /* End the capture for the whole process, recording why in the caller's
@@ -798,6 +910,8 @@ NOINSTR static void trace_sum_record(trace_tls_t *tls, void *this_fn,
     trace_frame_t *fr;
     uint64_t dur;
     uint32_t i;
+    uint64_t cin[TRACE_COUNTER_MAX], cch[TRACE_COUNTER_MAX];
+    int counted = 0;
 
     if (tls->first_ts == 0)
         tls->first_ts = now;
@@ -807,14 +921,26 @@ NOINSTR static void trace_sum_record(trace_tls_t *tls, void *this_fn,
         if (tls->depth >= TRACE_SUM_DEPTH) {
             tls->truncated++;
             tls->depth++;
+            if (g_pmu_n)
+                trace_counter_enter(tls, fn, now);
             return;
         }
         fr = &tls->stack[tls->depth++];
         fr->fn = fn;
         fr->t0 = now;
         fr->child = 0;
+        /* Last thing before returning into the function, so none of the
+         * bookkeeping above lands inside the measured window. */
+        if (g_pmu_n)
+            trace_counter_enter(tls, fn, now);
         return;
     }
+
+    /* Read the counter before any of the exit bookkeeping, for the same
+     * reason the enter path reads it last: whatever runs between the two
+     * reads is counted as if the function had done it. */
+    if (g_pmu_n)
+        counted = trace_counter_exit(tls, fn, now, cin, cch);
 
     if (tls->depth > TRACE_SUM_DEPTH) {
         tls->depth--;   /* unwinding the part we never recorded */
@@ -845,6 +971,14 @@ NOINSTR static void trace_sum_record(trace_tls_t *tls, void *this_fn,
         if (dur > e->max)
             e->max = dur;
         e->hist[trace_hist_bucket(dur)]++;
+        if (counted) {
+            unsigned k;
+            e->counter_calls++;
+            for (k = 0; k < g_pmu_n; k++) {
+                e->counter_incl[k] += cin[k];
+                e->counter_self[k] += cin[k] - cch[k];
+            }
+        }
     }
     if (tls->depth > 0)
         tls->stack[tls->depth - 1].child += dur;
@@ -882,6 +1016,16 @@ NOINSTR static void trace_sum_write(trace_tls_t *tls) {
     hdr.records = tls->tab_count;
     hdr.span = tls->last_ts - tls->first_ts;
     hdr.truncated = tls->truncated;
+    hdr.counter_n = g_pmu_n;
+    for (i = 0; i < g_pmu_n; i++) {
+        hdr.counter_type[i] = g_pmu_type[i];
+        hdr.counter_config[i] = g_pmu_config[i];
+        hdr.counter_self[i] = g_pmu_self[i];
+    }
+    hdr.counter_read_ns = g_pmu_read_ns;
+    hdr.counter_skipped = (uint64_t)atomic_load(&g_pmu_skipped);
+    hdr.counter_mux = (uint64_t)atomic_load(&g_pmu_mux)
+                    + tls->pmu.multiplexed;
     if (trace_write_all(fd, &hdr, sizeof(hdr), NULL) != 0) {
         close(fd);
         return;
@@ -900,6 +1044,9 @@ NOINSTR static void trace_sum_write(trace_tls_t *tls) {
         rec.min = e->min == UINT64_MAX ? 0 : e->min;
         rec.max = e->max;
         memcpy(rec.hist, e->hist, sizeof(rec.hist));
+        rec.counter_calls = e->counter_calls;
+        memcpy(rec.counter_incl, e->counter_incl, sizeof(rec.counter_incl));
+        memcpy(rec.counter_self, e->counter_self, sizeof(rec.counter_self));
         if (trace_write_all(fd, &rec, sizeof(rec), NULL) != 0)
             break;
     }
@@ -909,6 +1056,11 @@ NOINSTR static void trace_sum_write(trace_tls_t *tls) {
 /* --- Lifecycle --- */
 
 NOINSTR static void trace_tls_close(trace_tls_t *tls) {
+    if (tls->pmu_ready) {
+        atomic_fetch_add(&g_pmu_mux, (uint_fast64_t)tls->pmu.multiplexed);
+        trace_pmu_close(&tls->pmu);
+        tls->pmu_ready = 0;
+    }
     if (g_mode == TRACE_MODE_SUMMARY) {
         trace_sum_write(tls);
         return;
@@ -941,6 +1093,29 @@ NOINSTR static void trace_atexit(void) {
         /* Second half of the clock calibration pair. Deriving the tick rate
          * across the whole run beats any startup measurement, and costs one
          * event. */
+        if (g_mode == TRACE_MODE_EVENTS && g_pmu_n) {
+            /* What the guard rail refused, and whether the PMU was
+             * time-slicing — both make a report say less than it appears
+             * to, so both are said out loud. */
+            uint32_t i;
+            trace_tls_flush(tl_trace);
+            for (i = 0; g_sel && i <= g_sel_mask; i++) {
+                trace_sel_t *s = &g_sel[i];
+                uint64_t n;
+                if (s->addr == 0
+                        || !atomic_load_explicit(&s->demoted,
+                                                 memory_order_relaxed))
+                    continue;
+                n = (uint64_t)atomic_load(&s->calls);
+                trace_marker_at(tl_trace, s->addr - g_load_bias,
+                                TRACE_MARK_CSKIP,
+                                n ? (uint64_t)atomic_load(&s->dur) / n : 0);
+            }
+            if (atomic_load(&g_pmu_mux) || tl_trace->pmu.multiplexed)
+                trace_marker_at(tl_trace, 0, TRACE_MARK_CMUX,
+                                (uint64_t)atomic_load(&g_pmu_mux)
+                                + tl_trace->pmu.multiplexed);
+        }
         if (g_use_ticks && g_mode == TRACE_MODE_EVENTS) {
             trace_tls_flush(tl_trace);
             trace_marker(tl_trace, TRACE_MARK_CLOCK, trace_mono_ns());
@@ -1004,6 +1179,212 @@ NOINSTR static int trace_phdr_cb(struct dl_phdr_info *info, size_t size,
     (void)size;
     *(uint64_t *)data = (uint64_t)info->dlpi_addr;
     return 1;  /* first entry is the main object; stop there */
+}
+
+/* --- Hardware counters: selection --- */
+
+/* splitmix64 finalizer: function addresses are dense and 16-byte aligned,
+ * so the low bits alone would collide in every slot. */
+NOINSTR static inline uint32_t trace_sel_hash(uint64_t a) {
+    a ^= a >> 33;
+    a *= 0xff51afd7ed558ccdull;
+    a ^= a >> 33;
+    return (uint32_t)a;
+}
+
+/*
+ * The one lookup on the hot path.
+ *
+ * Returns the slot for a selected, not-yet-demoted function, or NULL. Every
+ * instrumented function pays this when counters are on; the table is sized
+ * to at least twice the selection so probes stay short, and the selection is
+ * expected to be tens of functions, which is what makes that affordable.
+ */
+NOINSTR static inline trace_sel_t *trace_sel_find(uint64_t addr) {
+    uint32_t i = trace_sel_hash(addr) & g_sel_mask;
+    uint32_t probes = 0;
+    while (probes++ <= g_sel_mask) {
+        trace_sel_t *s = &g_sel[i];
+        if (s->addr == addr)
+            return atomic_load_explicit(&s->demoted, memory_order_relaxed)
+                   ? NULL : s;
+        if (s->addr == 0)
+            return NULL;
+        i = (i + 1) & g_sel_mask;
+    }
+    return NULL;
+}
+
+NOINSTR static void trace_sel_insert(uint64_t addr) {
+    uint32_t i = trace_sel_hash(addr) & g_sel_mask;
+    while (g_sel[i].addr != 0) {
+        if (g_sel[i].addr == addr)
+            return;
+        i = (i + 1) & g_sel_mask;
+    }
+    g_sel[i].addr = addr;
+    g_sel_count++;
+}
+
+/*
+ * Load the counter map written by `callsight counters`.
+ *
+ * Text, because it has to be the same file for a 32-bit big-endian agent as
+ * for an x86-64 one, and because a profiler's configuration should be
+ * readable by the person configuring it. Addresses are link-time, so the
+ * load bias goes on here — once, at init, rather than on every hook.
+ */
+NOINSTR static void trace_load_counters(const char *path) {
+    enum { MAX_MAP = 1u << 20 };   /* ~30k functions; far past useful */
+    char *buf, *p;
+    long size;
+    uint64_t floor_ns = 0;
+    int floor_auto = 1;
+    uint32_t addrs = 0, slots = 8;
+    FILE *f = fopen(path, "rb");
+
+    if (!f)
+        return;                    /* no map is simply "no counters" */
+    if (fseek(f, 0, SEEK_END) != 0 || (size = ftell(f)) < 0
+            || size > (long)MAX_MAP || fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        return;
+    }
+    buf = (char *)malloc((size_t)size + 1);
+    if (!buf) {
+        fclose(f);
+        return;
+    }
+    if (fread(buf, 1, (size_t)size, f) != (size_t)size) {
+        free(buf);
+        fclose(f);
+        return;
+    }
+    buf[size] = '\0';
+    fclose(f);
+
+    /* First pass: events, floor, and how many addresses to make room for. */
+    for (p = buf; *p; ) {
+        char *line = p;
+        char *nl = strchr(p, '\n');
+        p = nl ? nl + 1 : p + strlen(p);
+        if (nl)
+            *nl = '\0';
+        if (line[0] == '\0' || line[0] == '#')
+            continue;
+        if (strncmp(line, "event ", 6) == 0) {
+            unsigned long type = 0;
+            unsigned long long config = 0;
+            char *sp = strchr(line + 6, ' ');
+            if (sp && g_pmu_n < TRACE_COUNTER_MAX
+                    && sscanf(sp, "%lu %llu", &type, &config) == 2) {
+                g_pmu_type[g_pmu_n] = (uint32_t)type;
+                g_pmu_config[g_pmu_n] = (uint64_t)config;
+                g_pmu_n++;
+            }
+        } else if (strncmp(line, "min ", 4) == 0) {
+            if (strcmp(line + 4, "auto") != 0) {
+                floor_auto = 0;
+                floor_ns = strtoull(line + 4, NULL, 10);
+            }
+        } else if ((line[0] >= '0' && line[0] <= '9')
+                   || (line[0] >= 'a' && line[0] <= 'f')) {
+            addrs++;
+        }
+    }
+    if (addrs == 0 || g_pmu_n == 0) {
+        free(buf);
+        g_pmu_n = 0;
+        return;
+    }
+    while (slots < addrs * 2u)
+        slots <<= 1;
+    g_sel = (trace_sel_t *)calloc(slots, sizeof(*g_sel));
+    if (!g_sel) {
+        free(buf);
+        g_pmu_n = 0;
+        return;
+    }
+    g_sel_mask = slots - 1u;
+
+    /* Second pass: the addresses. The buffer's newlines are now NULs, so
+     * walk it as a sequence of strings. */
+    {
+        char *end = buf + size;
+        for (p = buf; p < end; p += strlen(p) + 1) {
+            char *sp;
+            uint64_t a;
+            if (*p == '\0' || *p == '#')
+                continue;
+            if (strncmp(p, "event ", 6) == 0 || strncmp(p, "min ", 4) == 0
+                    || strncmp(p, "exe ", 4) == 0
+                    || strncmp(p, "build-id ", 9) == 0
+                    || strncmp(p, "CALLSIGHT-COUNTERS", 18) == 0)
+                continue;
+            a = strtoull(p, &sp, 16);
+            if (sp == p || a == 0)
+                continue;
+            trace_sel_insert(a + g_load_bias);
+        }
+    }
+    free(buf);
+
+    /* 'auto' cannot be resolved yet: it is a multiple of the read cost, and
+     * nothing has measured that. trace_pmu_setup() finishes the job. */
+    g_pmu_floor_auto = floor_auto;
+    g_pmu_floor_ns = floor_auto ? 0 : floor_ns;
+}
+
+/*
+ * Decide whether counters are usable at all, and what they cost.
+ *
+ * Called once, from init, after the clock is chosen — the floor is compared
+ * against durations in the capture's own time unit, so it has to be
+ * converted into that unit here.
+ */
+NOINSTR static void trace_pmu_setup(void) {
+    trace_pmu_t probe;
+    uint64_t self[TRACE_COUNTER_MAX];
+    uint64_t read_ns = 0;
+    unsigned i;
+
+    if (g_pmu_n == 0)
+        return;
+
+    /* The check that matters: perf_event_open succeeding proves nothing.
+     * Without this, a container reports zero for every function and looks
+     * perfectly healthy doing it. */
+    if (!trace_pmu_prove(g_pmu_type[0], g_pmu_config[0])) {
+        fprintf(stderr, "callsight: hardware counters are not usable here "
+                        "(the event opens but never reaches hardware — "
+                        "typical in a container); continuing without them\n");
+        g_pmu_n = 0;
+        return;
+    }
+    if (trace_pmu_open(&probe, g_pmu_type, g_pmu_config, g_pmu_n)
+            == TRACE_PMU_OFF) {
+        fprintf(stderr, "callsight: could not open the counter group; "
+                        "continuing without counters\n");
+        g_pmu_n = 0;
+        return;
+    }
+    trace_pmu_calibrate(&probe, &read_ns, self);
+    trace_pmu_close(&probe);
+
+    g_pmu_read_ns = read_ns;
+    for (i = 0; i < g_pmu_n; i++)
+        g_pmu_self[i] = self[i];
+
+    if (g_pmu_floor_auto)
+        g_pmu_floor_ns = read_ns * 2u * TRACE_PMU_FLOOR_RATIO;
+
+    /* Into the capture's time unit, so the hot path compares two plain
+     * integers rather than converting on every call. */
+    if (g_use_ticks && g_tick_hz)
+        g_pmu_floor = (uint64_t)((double)g_pmu_floor_ns
+                                 * (double)g_tick_hz / 1e9);
+    else
+        g_pmu_floor = g_pmu_floor_ns;
 }
 
 NOINSTR static uint64_t trace_env_u64(const char *name, uint64_t fallback) {
@@ -1169,6 +1550,22 @@ NOINSTR static void trace_global_init(void) {
     if (!g_shm)
         mkdir(g_trace_dir, 0755); /* ignore EEXIST */
 
+    /*
+     * Hardware counters. The map defaults to sitting beside the traces,
+     * which is the one directory `callsight run` and the web UI already
+     * agree on; TRACE_COUNTERS=none turns the feature off without editing
+     * a config.
+     */
+    env = getenv("TRACE_COUNTERS");
+    if (!env || env[0] == '\0') {
+        char path[TRACE_PATH_MAX];
+        snprintf(path, sizeof(path), "%s/callsight.counters", g_trace_dir);
+        trace_load_counters(path);
+    } else if (strcmp(env, "none") != 0) {
+        trace_load_counters(env);
+    }
+    trace_pmu_setup();
+
     pthread_key_create(&g_trace_key, trace_tls_destroy);
     pthread_atfork(NULL, NULL, trace_atfork_child);
     atexit(trace_atexit);
@@ -1210,6 +1607,16 @@ NOINSTR static int trace_tls_activate(trace_tls_t *tls) {
         return 1;
     tls->pid = (uint32_t)getpid();
 
+    /* Counters are per thread: the kernel saves and restores a per-thread
+     * event across context switches, which is exactly the property wall
+     * time does not have. A thread that cannot open its group simply
+     * records no counters — the rest of its trace is unaffected. */
+    if (g_pmu_n && !tls->pmu_ready) {
+        if (trace_pmu_open(&tls->pmu, g_pmu_type, g_pmu_config, g_pmu_n)
+                != TRACE_PMU_OFF)
+            tls->pmu_ready = 1;
+    }
+
     if (g_mode == TRACE_MODE_SUMMARY) {
         if (!tls->tab && !trace_sum_init(tls))
             return 0;
@@ -1225,6 +1632,7 @@ NOINSTR static int trace_tls_activate(trace_tls_t *tls) {
     }
     if (g_shm) {
         tls->active = 1;      /* streaming: nothing per-thread to open */
+        trace_counter_markers(tls);
         return 1;
     }
     if (!trace_open_segment(tls))
@@ -1259,21 +1667,153 @@ NOINSTR static trace_tls_t *trace_tls_get(void) {
     return tls;
 }
 
+/* --- Hardware counters: the hot path --- */
+
+/*
+ * A selected function was entered: stack its counter values.
+ *
+ * The whole cost of this feature sits behind the g_pmu_n test in the
+ * caller. A function that was not selected pays one predictable branch and
+ * one hash probe, which is the same bargain compile-time exclusion already
+ * makes.
+ */
+NOINSTR static void trace_counter_enter(trace_tls_t *tls, uint64_t fn,
+                                        uint64_t now) {
+    trace_cframe_t *cf;
+
+    if (!tls->pmu_ready || tls->cdepth >= TRACE_PMU_DEPTH)
+        return;
+    if (!trace_sel_find(fn))
+        return;
+
+    cf = &tls->cstack[tls->cdepth++];
+    cf->fn = fn;
+    cf->t0 = now;
+    cf->reads = 0;
+    memset(cf->child, 0, sizeof(cf->child));
+    trace_pmu_read(&tls->pmu, cf->in);
+    if (tls->cdepth > 1)
+        tls->cstack[tls->cdepth - 2].reads++;
+}
+
+/*
+ * The matching exit: fill out[] with this call's deltas, or return 0.
+ *
+ * Two corrections, both plain bookkeeping over counts we already have
+ * rather than estimates:
+ *   - the instrumentation's own footprint, once for this call's own pair of
+ *     reads and once for every read made inside it;
+ *   - nothing else. Wall time is left alone deliberately; the reads perturb
+ *     it, and the report says so rather than quietly adjusting it.
+ */
+NOINSTR static int trace_counter_exit(trace_tls_t *tls, uint64_t fn,
+                                      uint64_t now, uint64_t *incl,
+                                      uint64_t *child) {
+    uint64_t vals[TRACE_COUNTER_MAX];
+    trace_cframe_t *cf;
+    uint64_t dur, cost;
+    unsigned i;
+    uint32_t d;
+
+    if (!tls->pmu_ready || tls->cdepth == 0)
+        return 0;
+    /* Nearest unmatched enter for this function; frames above it were left
+     * dangling by a longjmp and are dropped, matching what the time path
+     * and the offline analyzer both do. */
+    d = tls->cdepth;
+    while (d > 0 && tls->cstack[d - 1].fn != fn)
+        d--;
+    if (d == 0)
+        return 0;
+    tls->cdepth = d - 1;
+    cf = &tls->cstack[tls->cdepth];
+
+    trace_pmu_read(&tls->pmu, vals);
+    dur = now > cf->t0 ? now - cf->t0 : 0;
+
+    for (i = 0; i < g_pmu_n; i++) {
+        uint64_t delta = vals[i] > cf->in[i] ? vals[i] - cf->in[i] : 0;
+        /* One pair of reads for this call, plus every read made inside it. */
+        cost = (uint64_t)(cf->reads + 1u) * g_pmu_self[i];
+        delta = delta > cost ? delta - cost : 0;
+        incl[i] = delta;
+        child[i] = cf->child[i];
+        if (tls->cdepth > 0)
+            tls->cstack[tls->cdepth - 1].child[i] += delta;
+    }
+    for (i = g_pmu_n; i < TRACE_COUNTER_MAX; i++)
+        incl[i] = child[i] = 0;
+    if (tls->cdepth > 0)
+        tls->cstack[tls->cdepth - 1].reads += cf->reads + 1u;
+
+    /*
+     * Guard rail. A function far shorter than the reads it pays for is
+     * measuring the instrument, so after enough samples to be sure, stop
+     * reading it and say which function and why. The evidence is gathered
+     * only until the verdict is in.
+     */
+    if (g_pmu_floor) {
+        trace_sel_t *s = trace_sel_find(fn);
+        if (s) {
+            uint64_t n = atomic_fetch_add_explicit(&s->calls, 1,
+                                                   memory_order_relaxed) + 1;
+            uint64_t total = atomic_fetch_add_explicit(&s->dur, dur,
+                                                       memory_order_relaxed)
+                             + dur;
+            if (n >= TRACE_PMU_JUDGE_AFTER && total / n < g_pmu_floor) {
+                atomic_store_explicit(&s->demoted, 1, memory_order_relaxed);
+                atomic_fetch_add_explicit(&g_pmu_skipped, 1,
+                                          memory_order_relaxed);
+            }
+        }
+    }
+    return 1;
+}
+
 /* --- Hooks --- */
 
 /* The hot path proper: timestamp, store, flush when the batch is full. */
 NOINSTR static void trace_record_inner(trace_tls_t *tls, void *this_fn,
                                        void *call_site, uint8_t kind) {
-    trace_event_t *ev = &tls->buf[tls->len++];
-    ev->ts_ns = trace_now();
-    ev->func_addr = (uint64_t)(uintptr_t)this_fn;
+    trace_event_t *ev;
+    uint64_t now = trace_now();
+    uint64_t fn = (uint64_t)(uintptr_t)this_fn;
+    uint64_t cin[TRACE_COUNTER_MAX], cch[TRACE_COUNTER_MAX];
+    int counted = 0;
+
+    /* Before the record is written, so composing it does not land inside
+     * the measured window. */
+    if (g_pmu_n && kind == (uint8_t)TRACE_EVENT_EXIT)
+        counted = trace_counter_exit(tls, fn, now, cin, cch);
+
+    ev = &tls->buf[tls->len++];
+    ev->ts_ns = now;
+    ev->func_addr = fn;
     ev->caller_addr = (uint64_t)(uintptr_t)call_site;
     ev->tid = tls->tid;
     ev->kind = kind;
     ev->_pad[0] = ev->_pad[1] = ev->_pad[2] = 0;
 
+    if (counted && tls->len < TRACE_BUF_CAPACITY) {
+        /* Straight after the EXIT it belongs to, so the reader can attach it
+         * to the call it just closed without carrying any state of its own. */
+        trace_event_t *cv = &tls->buf[tls->len++];
+        cv->ts_ns = cin[0];
+        cv->func_addr = cin[1];
+        cv->caller_addr = cin[2];
+        cv->tid = tls->tid;
+        cv->kind = (uint8_t)TRACE_EVENT_COUNTER;
+        cv->_pad[0] = cv->_pad[1] = cv->_pad[2] = 0;
+    }
+
+    /* Flush first: a flush is a write syscall, and taking the entry reading
+     * before it would charge that syscall to the function about to run. */
     if (tls->len >= TRACE_BUF_CAPACITY)
         trace_tls_flush(tls);
+
+    /* Last, for the same reason: the function body starts right after. */
+    if (g_pmu_n && kind == (uint8_t)TRACE_EVENT_ENTER)
+        trace_counter_enter(tls, fn, now);
 }
 
 /*
