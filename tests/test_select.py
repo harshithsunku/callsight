@@ -28,7 +28,8 @@ class TestParseConfig(unittest.TestCase):
             "exclude-func crc32_update\n"
             "include-func handle_request\n"
             "include-func process 2\n")
-        includes, excludes, funcs, include_funcs = flags.parse_config(path)
+        includes, excludes, funcs, include_funcs = \
+            flags.parse_config(path)[:4]
         self.assertEqual(includes, ["src/net/**"])
         self.assertEqual(excludes, ["src/utils/rng.c"])
         self.assertEqual(funcs, ["crc32_update"])

@@ -209,7 +209,9 @@ def scan(path: str):
         raise HTTPException(400, "no trace.config — save one first")
     sources = flags.scan_sources(p)
     try:
-        includes, excludes, funcs, include_funcs = flags.parse_config(config)
+        spec = flags.parse_config(config)
+        includes, excludes, include_funcs = (spec.includes, spec.excludes,
+                                             spec.include_funcs)
         if include_funcs:
             selected, dropped, auto_funcs, reachable, warnings = \
                 flags.function_selection(include_funcs, sources, includes,

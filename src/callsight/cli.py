@@ -192,6 +192,37 @@ def cmd_run(args):
     if args.clock:
         env["TRACE_CLOCK"] = args.clock
 
+    exe = args.exe or args.command[0]
+    # Counter selection is regenerated on every run rather than cached: the
+    # map is a list of addresses, and after a rebuild those addresses point
+    # at whatever now occupies them. Nothing downstream could detect that —
+    # the counts would simply belong to the wrong functions.
+    config = Path(args.config)
+    if config.exists():
+        try:
+            _spec, sel = _counter_selection(config, exe,
+                                            config.resolve().parent)
+        except SystemExit:
+            raise
+        except (OSError, ValueError) as e:
+            print(f"warning: counter selection skipped: {e}",
+                  file=sys.stderr)
+            sel = None
+        if sel is not None:
+            from callsight import counters, elf
+            try:
+                build_id = elf.Elf(exe).build_id()
+            except (elf.ElfError, OSError):
+                build_id = None
+            path = counters.write_map(counters.map_path(tracedir), sel, exe,
+                                      build_id)
+            env["TRACE_COUNTERS"] = str(Path(path).resolve())
+            for w in sel.warnings:
+                print(f"warning: {w}", file=sys.stderr)
+            if sel.enabled:
+                print(f"counting {', '.join(n for n, _t, _c in sel.events)} "
+                      f"for {len(sel.entries)} function(s)")
+
     try:
         proc = subprocess.Popen(args.command, env=env)
     except FileNotFoundError:
@@ -221,7 +252,6 @@ def cmd_run(args):
         print(f"\n(the traced program exited with status {proc.returncode}; "
               f"reporting on what it recorded)\n", file=sys.stderr)
 
-    exe = args.exe or args.command[0]
     try:
         if args.out:
             # The traced program writes to the same stdout we do, so a
@@ -254,6 +284,72 @@ def cmd_diff(args):
     if args.fail_over is not None and worst > args.fail_over:
         sys.exit(f"\nregression: {worst:.1f}% exceeds the "
                  f"{args.fail_over:.1f}% budget")
+
+
+def _counter_selection(config, exe, project):
+    """Shared by `counters` and `run`: parse, resolve, and return
+    (spec, selection) — or (spec, None) when nothing asked for counters."""
+    from callsight import counters
+
+    spec = flags.parse_config(str(config))
+    if not (spec.counter_events or spec.counter_funcs or spec.counter_files):
+        return spec, None
+    sources = flags.scan_sources(project)
+    if not sources:
+        sys.exit(f"counters: no C/C++ sources under {project}")
+    return spec, counters.resolve_selection(spec, exe, sources, project)
+
+
+def cmd_counters(args):
+    """Resolve the config's counter directives against the built binary.
+
+    The hooks receive addresses, the config names functions, and only the
+    linked binary knows how one becomes the other — so this runs after the
+    build, and `callsight run` does it for you.
+    """
+    from callsight import counters, elf
+
+    project = Path(args.project).resolve()
+    config = project / args.config if not os.path.isabs(args.config) \
+        else Path(args.config)
+    if not config.exists():
+        sys.exit(f"counters: no config at {config}")
+    exe = analyze.find_exe(args.exe)
+    if not exe:
+        sys.exit("counters: give --exe pointing at the instrumented binary")
+
+    spec, sel = _counter_selection(config, exe, project)
+    if sel is None:
+        print(f"{config} selects no functions for counting "
+              f"(add 'counter instructions' and 'counter-func <name>').")
+        return
+
+    desc = elf.describe(exe)
+    print(f"binary:  {exe}" + (f"  ({desc})" if desc else ""))
+    print(f"events:  {', '.join(n for n, _t, _c in sel.events) or '(none)'}")
+    print(f"floor:   {sel.min_ns}"
+          + ("  (derived from the measured cost of one counter read)"
+             if sel.min_ns == "auto" else " ns"))
+    print(f"counted: {len(sel.entries)} function(s)")
+    for w in sel.warnings:
+        print(f"warning: {w}", file=sys.stderr)
+
+    if args.list:
+        for addr, name in sel.entries:
+            print(f"  {addr:016x}  {name}")
+
+    out = Path(args.out) if args.out else \
+        Path(counters.map_path(project / args.dir))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        build_id = elf.Elf(exe).build_id()
+    except (elf.ElfError, OSError):
+        build_id = None
+    counters.write_map(out, sel, exe, build_id)
+    print(f"wrote {out}")
+    if not sel.enabled:
+        print("note: nothing will be counted until both an event and at "
+              "least one resolvable function are selected.")
 
 
 def _doctor_check(label, ok, detail, advisory=False):
@@ -302,12 +398,12 @@ def cmd_doctor(args):
     config = project / args.config
     if config.exists():
         try:
-            includes, excludes, funcs, include_funcs = \
-                flags.parse_config(str(config))
+            spec = flags.parse_config(str(config))
+            includes, excludes = spec.includes, spec.excludes
             sources = flags.scan_sources(project)
-            if include_funcs:
+            if spec.include_funcs:
                 selected, dropped = flags.function_selection(
-                    include_funcs, sources, includes, excludes)[:2]
+                    spec.include_funcs, sources, includes, excludes)[:2]
             else:
                 selected, dropped = flags.select(sources, includes, excludes)
             _doctor_check("trace.config", True,
@@ -349,6 +445,14 @@ def cmd_doctor(args):
                   f"{shm} available (needed only for TRACE_SHM streaming)",
                   advisory=True)
 
+    # Advisory: a machine without usable counters is perfectly fine for
+    # everything else callsight does. What is not fine is finding out only
+    # after a run has reported zero instructions for every function.
+    from callsight import counters as _counters
+    _probe = _counters.probe()
+    _doctor_check("hardware counters", _probe["available"],
+                  _counters.describe_probe(_probe), advisory=True)
+
     runtime = project / "callsight" / "trace.c"
     _doctor_check("runtime in project", runtime.exists(),
                   f"{runtime}" if runtime.exists() else
@@ -376,7 +480,9 @@ def cmd_scan(args):
     sources = flags.scan_sources(args.directory)
     if not sources:
         sys.exit(f"no C/C++ sources under {args.directory}")
-    includes, excludes, funcs, include_funcs = flags.parse_config(args.config)
+    spec = flags.parse_config(args.config)
+    includes, excludes, include_funcs = (spec.includes, spec.excludes,
+                                         spec.include_funcs)
     if include_funcs:
         selected, dropped, auto_funcs, reachable, warnings = \
             flags.function_selection(include_funcs, sources, includes,
@@ -560,6 +666,10 @@ def main(argv=None):
     p_run.add_argument("--keep", action="store_true",
                        help="keep trace files from earlier runs instead of "
                             "clearing them first")
+    p_run.add_argument("--config", default="trace.config",
+                       help="selection config; its counter directives are "
+                            "resolved against --exe before the run "
+                            "(default: trace.config)")
     p_run.add_argument("--exe", default=None,
                        help="binary to symbolize with (default: the command)")
     p_run.add_argument("--mode", choices=("events", "summary"),
@@ -605,6 +715,23 @@ def main(argv=None):
                         help="exit non-zero if any function regresses by "
                              "more than this percentage")
     p_diff.set_defaults(func=cmd_diff)
+
+    p_cnt = sub.add_parser("counters", help="resolve the config's hardware "
+                                            "counter selection into a map "
+                                            "the runtime reads")
+    p_cnt.add_argument("project", nargs="?", default=".")
+    p_cnt.add_argument("--config", default="trace.config")
+    p_cnt.add_argument("--exe", default=None,
+                       help="the instrumented binary (its symbol table is "
+                            "where the addresses come from)")
+    p_cnt.add_argument("--dir", default="traces",
+                       help="trace directory; the map is written here, "
+                            "where the runtime looks by default")
+    p_cnt.add_argument("--out", default=None,
+                       help="write the map somewhere else instead")
+    p_cnt.add_argument("--list", "-l", action="store_true",
+                       help="print every counted function and its address")
+    p_cnt.set_defaults(func=cmd_counters)
 
     p_doc = sub.add_parser("doctor", help="check the toolchain and "
                                           "environment")

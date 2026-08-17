@@ -23,6 +23,14 @@ Config syntax (one directive per line, '#' comments, blank lines ignored):
                              (statically resolved via callgraph.py);
                              optional N limits expansion depth
                              (0 = just <name>, 1 = direct callees, ...)
+    counter <ev>[,<ev>...]   hardware events to count (max 3), e.g.
+                             'instructions,cache-misses'
+    counter-func <name> [N]  count <name> (and N levels of its subtree)
+    counter-file <pattern>   count every instrumented function defined in
+                             matching files
+    counter-min auto|<ns>|0  skip counting functions shorter than this;
+                             'auto' (default) derives it from the measured
+                             cost of one counter read, 0 disables the guard
 
 Pattern matching against a source path (as passed to the compiler, e.g.
 'src/utils/rng.c') succeeds when the pattern matches the full path or any
@@ -63,6 +71,7 @@ import fnmatch
 import os
 import subprocess
 import sys
+from typing import NamedTuple
 
 try:
     from callsight import callgraph
@@ -73,8 +82,87 @@ except ImportError:  # direct execution: python3 src/callsight/flags.py
 SOURCE_SUFFIXES = (".c", ".cc", ".cpp")
 
 
+# --- Hardware counter events ----------------------------------------------
+#
+# Name -> (perf_event_attr.type, .config). The runtime never sees these
+# names: the resolved numbers travel in the counter map, so trace.c needs no
+# event table of its own and a new event name here needs no runtime change.
+PERF_TYPE_HARDWARE, PERF_TYPE_RAW = 0, 4
+
+COUNTER_EVENTS = {
+    "cycles":                   (PERF_TYPE_HARDWARE, 0),
+    "instructions":             (PERF_TYPE_HARDWARE, 1),
+    "cache-references":         (PERF_TYPE_HARDWARE, 2),
+    "cache-misses":             (PERF_TYPE_HARDWARE, 3),
+    "branch-instructions":      (PERF_TYPE_HARDWARE, 4),
+    "branch-misses":            (PERF_TYPE_HARDWARE, 5),
+    "bus-cycles":               (PERF_TYPE_HARDWARE, 6),
+    "stalled-cycles-frontend":  (PERF_TYPE_HARDWARE, 7),
+    "stalled-cycles-backend":   (PERF_TYPE_HARDWARE, 8),
+    "ref-cycles":               (PERF_TYPE_HARDWARE, 9),
+}
+
+# A PMU has a small number of general-purpose registers. Ask for more events
+# than it has and the kernel time-slices them, scaling the counts it returns
+# — an estimate, which is the one thing this feature exists not to produce.
+# Three fits every PMU callsight is likely to meet and leaves headroom.
+COUNTER_MAX_EVENTS = 3
+
+
+def parse_counter_event(name):
+    """(type, config) for an event name, or raise ValueError.
+
+    Raw codes as rNNNN pass whatever the PMU documents straight through, so
+    an uncommon event does not need a table entry here."""
+    if name in COUNTER_EVENTS:
+        return COUNTER_EVENTS[name]
+    if len(name) > 1 and name[0] == "r":
+        try:
+            return (PERF_TYPE_RAW, int(name[1:], 16))
+        except ValueError:
+            pass
+    raise ValueError(
+        f"unknown counter event '{name}'; known events are "
+        f"{', '.join(sorted(COUNTER_EVENTS))}, or a raw PMU code as rNNNN")
+
+
+class ConfigSpec(NamedTuple):
+    """Everything one trace.config says.
+
+    A named type rather than a tuple because it has grown twice now: the
+    counter directives are the second addition, and unpacking by position
+    breaks every call site each time.
+    """
+    includes: list          # 'include' patterns
+    excludes: list          # 'exclude' patterns
+    funcs: list             # 'exclude-func' names
+    include_funcs: list     # 'include-func' (name, depth-or-None)
+    counter_events: list    # 'counter' event names, in order
+    counter_funcs: list     # 'counter-func' (name, depth-or-None)
+    counter_files: list     # 'counter-file' patterns
+    counter_min: object     # 'counter-min': "auto", or ns as an int
+
+
+def _depth(path, lineno, directive, value):
+    """Split '<name> [depth]', shared by include-func and counter-func."""
+    name, _, depth = value.partition(" ")
+    if not depth:
+        return name, None
+    try:
+        return name, int(depth)
+    except ValueError:
+        sys.exit(f"{path}:{lineno}: {directive} depth must be an integer, "
+                 f"got '{depth.strip()}'")
+
+
+DIRECTIVES = ("include", "exclude", "exclude-func", "include-func",
+              "counter", "counter-func", "counter-file", "counter-min")
+
+
 def parse_config(path):
     includes, excludes, funcs, include_funcs = [], [], [], []
+    counter_events, counter_funcs, counter_files = [], [], []
+    counter_min = "auto"
     with open(path) as f:
         for lineno, raw in enumerate(f, 1):
             line = raw.strip()
@@ -91,30 +179,73 @@ def parse_config(path):
             elif directive == "exclude-func":
                 funcs.append(value)
             elif directive == "include-func":
-                name, _, depth = value.partition(" ")
-                if depth:
+                include_funcs.append(_depth(path, lineno, directive, value))
+            elif directive == "counter":
+                for ev in value.replace(",", " ").split():
                     try:
-                        depth = int(depth)
-                    except ValueError:
-                        sys.exit(f"{path}:{lineno}: include-func depth must "
-                                 f"be an integer, got '{depth}'")
-                else:
-                    depth = None
-                include_funcs.append((name, depth))
+                        parse_counter_event(ev)
+                    except ValueError as e:
+                        sys.exit(f"{path}:{lineno}: {e}")
+                    if ev not in counter_events:
+                        counter_events.append(ev)
+            elif directive == "counter-func":
+                counter_funcs.append(_depth(path, lineno, directive, value))
+            elif directive == "counter-file":
+                counter_files.append(value)
+            elif directive == "counter-min":
+                counter_min = _parse_counter_min(path, lineno, value)
             else:
                 sys.exit(f"{path}:{lineno}: unknown directive '{directive}' "
-                         f"(want: include, exclude, exclude-func, "
-                         f"include-func)")
-    return includes, excludes, funcs, include_funcs
+                         f"(want: {', '.join(DIRECTIVES)})")
+
+    if len(counter_events) > COUNTER_MAX_EVENTS:
+        sys.exit(
+            f"{path}: {len(counter_events)} counter events requested "
+            f"({', '.join(counter_events)}), at most {COUNTER_MAX_EVENTS} "
+            f"are supported.\nA PMU has a few general-purpose registers; "
+            f"asking for more makes the kernel time-slice them and scale "
+            f"the counts, which turns exact numbers into estimates. Record "
+            f"two runs instead.")
+    return ConfigSpec(includes, excludes, funcs, include_funcs,
+                      counter_events, counter_funcs, counter_files,
+                      counter_min)
 
 
-def render_config(excluded_files=(), include_funcs=(), excluded_funcs=()):
+def _parse_counter_min(path, lineno, value):
+    """'auto', or a duration: bare ns, or with a ns/us/ms/s suffix."""
+    text = value.strip().lower()
+    if text == "auto":
+        return "auto"
+    for suffix, scale in (("ms", 1000000), ("us", 1000), ("ns", 1),
+                          ("s", 1000000000)):
+        if text.endswith(suffix):
+            text, mult = text[:-len(suffix)].strip(), scale
+            break
+    else:
+        mult = 1
+    try:
+        n = float(text)
+    except ValueError:
+        sys.exit(f"{path}:{lineno}: counter-min wants 'auto', 0, or a "
+                 f"duration like '5us' — got '{value}'")
+    if n < 0:
+        sys.exit(f"{path}:{lineno}: counter-min cannot be negative")
+    return int(n * mult)
+
+
+def render_config(excluded_files=(), include_funcs=(), excluded_funcs=(),
+                  counter_events=(), counter_funcs=(), counter_files=(),
+                  counter_min=None):
     """Render trace.config text from web-UI config-builder selections.
 
     excluded_files: project-relative paths -> 'exclude' lines (the default is
         include-everything, so only exclusions need lines).
     include_funcs: iterable of (name, depth-or-None) -> 'include-func' lines.
     excluded_funcs: iterable of names -> 'exclude-func' lines.
+    counter_events: event names -> one 'counter' line.
+    counter_funcs: iterable of (name, depth-or-None) -> 'counter-func' lines.
+    counter_files: patterns -> 'counter-file' lines.
+    counter_min: None omits the line and takes the default.
     Order within each group is preserved; duplicates are dropped.
 
     Raises ValueError on values that would produce an unparseable config:
@@ -149,6 +280,8 @@ def render_config(excluded_files=(), include_funcs=(), excluded_funcs=()):
         "# trace.config — generated by the callsight web UI config builder.",
         "# Syntax: include <pattern> | exclude <pattern> |",
         "#         exclude-func <name> | include-func <name> [depth]",
+        "#         counter <events> | counter-func <name> [depth] |",
+        "#         counter-file <pattern> | counter-min auto|<ns>|0",
         "# Exclude always wins over include. Edit freely; see",
         "# https://github.com/harshithsunku/callsight for the full reference.",
         "",
@@ -166,6 +299,44 @@ def render_config(excluded_files=(), include_funcs=(), excluded_funcs=()):
         check_depth(depth)
         lines.append(f"include-func {name}" +
                      (f" {depth}" if depth is not None else ""))
+
+    events = dedupe(counter_events)
+    cfuncs = [tuple(f) for f in counter_funcs]
+    cfiles = dedupe(counter_files)
+    if events or cfuncs or cfiles or counter_min is not None:
+        lines.append("")
+        lines.append("# Hardware counters. Only instrumented functions can "
+                     "be counted, and only")
+        lines.append("# functions long enough to outweigh a counter read — "
+                     "see counter-min.")
+    for ev in events:
+        try:
+            parse_counter_event(ev)
+        except ValueError as e:
+            raise ValueError(str(e))
+    if len(events) > COUNTER_MAX_EVENTS:
+        raise ValueError(
+            f"{len(events)} counter events requested, at most "
+            f"{COUNTER_MAX_EVENTS} are supported: more than a PMU has "
+            f"registers makes the kernel scale the counts, which turns "
+            f"exact numbers into estimates")
+    if events:
+        lines.append("counter " + ",".join(events))
+    for pattern in cfiles:
+        check_path(pattern)
+        lines.append(f"counter-file {pattern}")
+    for name, depth in dedupe(cfuncs):
+        check_name(name)
+        check_depth(depth)
+        lines.append(f"counter-func {name}" +
+                     (f" {depth}" if depth is not None else ""))
+    if counter_min is not None:
+        if counter_min != "auto" and (not isinstance(counter_min, int)
+                                      or isinstance(counter_min, bool)
+                                      or counter_min < 0):
+            raise ValueError(f"invalid counter-min {counter_min!r}: want "
+                             f"'auto' or a non-negative number of ns")
+        lines.append(f"counter-min {counter_min}")
     return "\n".join(lines) + "\n"
 
 
@@ -292,16 +463,13 @@ def instrument_flags(includes, excludes, funcs, sources):
     return format_flags(*exclude_lists(excludes, funcs, dropped))
 
 
-def function_selection(include_funcs, sources, includes, excludes):
-    """Expand include-func seeds into a file/function selection.
+def with_headers(sources):
+    """sources plus the headers beside them.
 
-    Returns (selected, dropped, extra_exclude_funcs, reachable, warnings):
-    the source selection, additional exclude-func entries, the reachable
-    function set, and human-readable warnings (unknown seeds, substring
-    collisions dropped from the auto-excludes)."""
-    # Headers are parsed too: inline/static helpers DEFINED in a header are
-    # compiled into every including TU, so file-level exclusion of the .c
-    # files does not silence them — they can only be excluded by name.
+    Inline/static helpers DEFINED in a header are compiled into every
+    including TU, so file-level exclusion of the .c files does not silence
+    them — they can only be excluded by name, which means the call graph has
+    to know about them."""
     headers = []
     seen_dirs = set()
     for s in sources:
@@ -309,9 +477,22 @@ def function_selection(include_funcs, sources, includes, excludes):
         if d and d not in seen_dirs:
             seen_dirs.add(d)
             for ext in (".h", ".hpp", ".hh"):
-                headers.extend(os.path.join(d, f)
-                               for f in os.listdir(d) if f.endswith(ext))
-    graph = callgraph.build_graph(list(sources) + headers)
+                try:
+                    headers.extend(os.path.join(d, f)
+                                   for f in os.listdir(d) if f.endswith(ext))
+                except OSError:
+                    continue
+    return list(sources) + headers
+
+
+def function_selection(include_funcs, sources, includes, excludes):
+    """Expand include-func seeds into a file/function selection.
+
+    Returns (selected, dropped, extra_exclude_funcs, reachable, warnings):
+    the source selection, additional exclude-func entries, the reachable
+    function set, and human-readable warnings (unknown seeds, substring
+    collisions dropped from the auto-excludes)."""
+    graph = callgraph.build_graph(with_headers(sources))
     warnings = []
     seeds = []
     for name, depth in include_funcs:
@@ -389,7 +570,9 @@ def main(argv=None):
     if not sources:
         sys.exit("no sources given (use -- src/... or --scan DIR)")
 
-    includes, excludes, funcs, include_funcs = parse_config(args.config)
+    spec = parse_config(args.config)
+    includes, excludes, funcs, include_funcs = (
+        spec.includes, spec.excludes, spec.funcs, spec.include_funcs)
     reachable, warnings = None, []
     if include_funcs:
         selected, dropped, auto_funcs, reachable, warnings = \

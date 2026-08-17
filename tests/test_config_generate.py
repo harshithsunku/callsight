@@ -33,7 +33,7 @@ class TestRenderConfig(unittest.TestCase):
 
     def test_empty_selection_renders_comments_only(self):
         text = flags.render_config()
-        includes, excludes, funcs, include_funcs = self.directives(text)
+        includes, excludes, funcs, include_funcs = self.directives(text)[:4]
         self.assertEqual((includes, excludes, funcs, include_funcs),
                          ([], [], [], []))
         self.assertTrue(text.startswith("#"))
@@ -43,7 +43,7 @@ class TestRenderConfig(unittest.TestCase):
             excluded_files=["src/utils/rng.c", "tests"],
             include_funcs=[("handle_request", None), ("process", 2)],
             excluded_funcs=["crc32_update"])
-        includes, excludes, funcs, include_funcs = self.directives(text)
+        includes, excludes, funcs, include_funcs = self.directives(text)[:4]
         self.assertEqual(includes, [])
         self.assertEqual(excludes, ["src/utils/rng.c", "tests"])
         self.assertEqual(funcs, ["crc32_update"])
@@ -52,14 +52,15 @@ class TestRenderConfig(unittest.TestCase):
 
     def test_depth_zero_is_preserved(self):
         text = flags.render_config(include_funcs=[("main", 0)])
-        _, _, _, include_funcs = self.directives(text)
+        include_funcs = self.directives(text).include_funcs
         self.assertEqual(include_funcs, [("main", 0)])
 
     def test_duplicates_dropped_order_kept(self):
         text = flags.render_config(
             excluded_files=["b.c", "a.c", "b.c"],
             excluded_funcs=["f1", "f1"])
-        _, excludes, funcs, _ = self.directives(text)
+        spec = self.directives(text)
+        excludes, funcs = spec.excludes, spec.funcs
         self.assertEqual(excludes, ["b.c", "a.c"])
         self.assertEqual(funcs, ["f1"])
 
@@ -90,7 +91,7 @@ class TestRenderConfigValidation(unittest.TestCase):
         # Spaces in paths are legal: parse_config splits on the first
         # whitespace only.
         text = flags.render_config(excluded_files=["src/my dir/x.c"])
-        _, excludes, _, _ = _parse(text)
+        excludes = _parse(text).excludes
         self.assertEqual(excludes, ["src/my dir/x.c"])
 
     def test_bad_depth_rejected(self):
