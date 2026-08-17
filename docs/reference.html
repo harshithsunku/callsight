@@ -358,8 +358,14 @@ streamed segment is never half one thing and half the other.</p>
 Both axes are covered independently — 32-bit ARM by the ARMv7 build, big-endian by
 PowerPC and s390x — and the runtime contains no architecture-specific endian
 assumption.</p>
+<p>The cycle-counter clock is used on x86-64 and aarch64 only. 32-bit ARM has the
+same generic timer, but reaching it needs CP15 instructions that raise
+<code>SIGILL</code> where the timer is absent — and a runtime check cannot avoid
+that, because the check <em>is</em> the instruction. Those agents use
+<code>clock_gettime</code>, which is in the vDSO on ARMv7 anyway.</p>
 <p>Two build details matter on 32-bit agents, and both build fragments handle them
-for you. The runtime is compiled with <code>_FILE_OFFSET_BITS=64</code>, without
+for you.</p>
+<p> The runtime is compiled with <code>_FILE_OFFSET_BITS=64</code>, without
 which <code>ftruncate</code> fails past 2&nbsp;GB and <code>statvfs</code> can return
 <code>EOVERFLOW</code>. And the byte budget uses a 64-bit atomic: ARMv7 and up
 inline it, while ARMv5/v6, MIPS32 and PowerPC32 need <code>-latomic</code>, which

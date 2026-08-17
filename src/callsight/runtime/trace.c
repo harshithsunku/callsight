@@ -249,38 +249,25 @@ NOINSTR static uint64_t trace_ticks_hz_hint(void) {
     __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(v));
     return v;
 }
-#elif defined(__arm__) && defined(__ARM_ARCH) && __ARM_ARCH >= 7
-/*
- * 32-bit ARM: the same generic timer as aarch64, reached through CP15
- * instead of a system register. CNTVCT is a 64-bit value delivered in a
- * register pair, so it needs mrrc rather than mrc.
- *
- * Worth having precisely because these are the smallest devices callsight
- * targets: without it every event on a 32-bit board pays a clock_gettime,
- * and on older ARM kernels CLOCK_MONOTONIC_RAW is not even in the vDSO, so
- * that is a full syscall per event.
- *
- * The generic timer is optional on ARMv7 and the registers trap to
- * undefined-instruction where it is absent, so this is gated on a nonzero
- * CNTFRQ at startup (trace_ticks_usable) and falls back to the clock.
- */
-#define TRACE_HAVE_TICKS 1
-NOINSTR static inline uint64_t trace_ticks(void) {
-    uint32_t lo, hi;
-    __asm__ __volatile__("mrrc p15, 1, %0, %1, c14" : "=r"(lo), "=r"(hi));
-    return ((uint64_t)hi << 32) | lo;
-}
-NOINSTR static uint64_t trace_ticks_hz_hint(void) {
-    uint32_t hz;
-    __asm__ __volatile__("mrc p15, 0, %0, c14, c0, 0" : "=r"(hz));
-    return hz;
-}
-/* A zero frequency means the timer is not implemented (or the firmware
- * never programmed CNTFRQ, which is indistinguishable and equally unusable). */
-NOINSTR static int trace_ticks_usable(void) {
-    return trace_ticks_hz_hint() != 0;
-}
 #else
+/*
+ * Everything else, including 32-bit ARM, uses clock_gettime.
+ *
+ * 32-bit ARM does have the same generic timer as aarch64, reachable through
+ * CP15 (mrrc p15, 1, .., c14 for CNTVCT; mrc p15, 0, .., c14, c0, 0 for
+ * CNTFRQ), and it was tried here. It is deliberately not shipped, for a
+ * reason worth writing down so nobody re-adds it:
+ *
+ * The generic timer is optional on ARMv7 and those instructions raise
+ * SIGILL where it is absent — and a runtime check cannot avoid that,
+ * because the check IS the instruction. Reading CNTFRQ to find out whether
+ * CNTFRQ is readable kills the host process at startup, which is the worst
+ * failure this tool could have; qemu-arm demonstrated it immediately.
+ * AT_HWCAP's event-stream bit would be a sound proxy, but that path could
+ * not be exercised on any hardware or emulator available here, and an
+ * untested fast path guarding against a SIGILL is not a trade worth making
+ * for a clock that is already in the vDSO on ARMv7.
+ */
 #define TRACE_HAVE_TICKS 0
 NOINSTR static inline uint64_t trace_ticks(void) { return 0; }
 NOINSTR static int trace_ticks_usable(void) { return 0; }
