@@ -42,11 +42,34 @@ starts.
 ## Roadmap
 
 **Next up**
-- **Hardware counters per function** — `perf_event_open` in per-thread mode read
-  via `rdpmc` from the mmap page: exact instructions retired and cache misses
-  *per call*. This is the one remaining thing `perf` does that callsight
-  cannot, and it needs its own pass (PMU multiplexing,
-  `perf_event_paranoid` handling, arch fallbacks).
+- **Hardware counters for selected functions** — `perf_event_open` in
+  per-thread counting mode: exact instructions retired and cache misses for
+  the functions you name, chosen in `trace.config` the same way hooks
+  already are.
+
+  Measured before committing to a design, because the platform story is
+  narrower than it looks:
+
+  | | x86-64 (in an LXC container) | aarch64 (Snapdragon 845, bare metal) |
+  |---|---|---|
+  | `perf_event_open` succeeds | yes | yes |
+  | counters actually count | **no — silently zero** | yes, exactly |
+  | userspace fast path | `cap_user_rdpmc=1` but never scheduled | **unavailable** (`cap_user_rdpmc=0`) |
+  | cost per read | — | **1381 ns** (syscall only) |
+
+  Linux does not enable userspace counter reads on arm64, so every read
+  there is a syscall — 12x the whole hook cost, twice per call. Per-*call*
+  counters are therefore a bare-metal-x86 feature; the portable design is
+  per-*function* selection, where 2.8 us against a 1 ms function is 0.3%.
+  The bulk of the work is refusing to report a number when the counter is
+  not really running: on the x86 box above, a naive implementation would
+  report zero instructions for every function and look perfectly healthy.
+
+  What survives the scrutiny is the payoff. The same loop run six times
+  varied by **one instruction**, against +/-0.24% for wall time on an idle
+  machine — four orders of magnitude steadier, which is what would make
+  `callsight diff` a regression gate you can trust rather than one you have
+  to eyeball.
 - Live stream view in the web UI (watch a remote device's trace arrive)
 - Pure-Python ELF/DWARF symbolizer (optional extra) to drop the binutils
   dependency for cross-compiled targets entirely
