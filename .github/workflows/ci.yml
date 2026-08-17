@@ -126,8 +126,8 @@ jobs:
             --format folded | head -5
           uv run callsight analyze traces/ --exe bin/matrixlab.instr \
             --format chrome > /tmp/chrome.json
-          uv run python -c "import json;d=json.load(open('/tmp/chrome.json'));\
-assert d['traceEvents'], 'no timeline events';print(len(d['traceEvents']),'spans')"
+          uv run python ../../.github/scripts/check_chrome_trace.py \
+            /tmp/chrome.json
           uv run callsight analyze traces/ --exe bin/matrixlab.instr \
             --format callers | head -5
 
