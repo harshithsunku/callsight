@@ -7,16 +7,21 @@ land in the file marked as nanoseconds and every duration in the report is
 wrong by the clock ratio — with nothing to show for it. So CI asserts the
 headers rather than trusting that the protocol was wired up.
 
+A big-endian device is checked the same way: the header must be readable in
+the device's byte order, and mixed orders within one file — a host-endian
+header in front of relayed device-endian events — are exactly what this
+catches, because analyze.read_header would then report the wrong everything.
+
 Usage: check_stream_headers.py <dir-with-trace.stream.*.bin>
 """
 
 import glob
-import struct
 import sys
+from pathlib import Path
 
-HEADER = struct.Struct("<8sIIIIQQQQQIIQ")
-MAGIC = b"MLTRACE\0"
-HF_TICKS = 0x1
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+
+from callsight import analyze
 
 
 def main(argv):
@@ -27,24 +32,32 @@ def main(argv):
         sys.exit(f"no stream files in {argv[1]}")
 
     for path in files:
-        with open(path, "rb") as f:
-            raw = f.read(HEADER.size)
-        if len(raw) < HEADER.size:
-            sys.exit(f"{path}: shorter than one header")
-        magic, version, event_size, header_size, flags = HEADER.unpack(raw)[:5]
-        tick_hz = HEADER.unpack(raw)[6]
-        if magic != MAGIC:
-            sys.exit(f"{path}: bad magic {magic!r}")
-        if version != 2:
-            sys.exit(f"{path}: format version {version}, expected 2")
-        if header_size != HEADER.size:
-            sys.exit(f"{path}: header_size {header_size} != {HEADER.size}")
-        if event_size != 32:
-            sys.exit(f"{path}: event_size {event_size} != 32")
-        if (flags & HF_TICKS) and tick_hz <= 0:
+        # read_header is the real reader, byte order and all; checking with
+        # anything else would only prove the check agrees with itself.
+        meta = analyze.read_header(path)
+        if meta is None:
+            sys.exit(f"{path}: unreadable header")
+        if meta["version"] != analyze.VERSION:
+            sys.exit(f"{path}: format version {meta['version']}, "
+                     f"expected {analyze.VERSION}")
+        if meta["header_size"] != analyze.HEADER.size:
+            sys.exit(f"{path}: header_size {meta['header_size']} != "
+                     f"{analyze.HEADER.size}")
+        if (meta["flags"] & analyze.HF_TICKS) and meta["tick_hz"] <= 0:
             sys.exit(f"{path}: timestamps are raw ticks but no tick rate was "
                      f"carried over the wire — the handshake lost it")
-    print(f"{len(files)} stream segment(s) carry a readable clock")
+        # The events behind the header must be in the same order as the
+        # header itself: a segment whose two halves disagree parses into
+        # nonsense with no error anywhere.
+        flagged = bool(meta["flags"] & analyze.HF_BIGENDIAN)
+        if flagged != meta["big_endian"]:
+            sys.exit(f"{path}: header byte order ({meta['big_endian']}) "
+                     f"contradicts TRACE_HF_BIGENDIAN ({flagged}) — the "
+                     f"server wrote a header in the wrong order")
+    orders = {("big" if analyze.read_header(p)["big_endian"] else "little")
+              for p in files}
+    print(f"{len(files)} stream segment(s) carry a readable clock "
+          f"({'/'.join(sorted(orders))}-endian)")
 
 
 if __name__ == "__main__":

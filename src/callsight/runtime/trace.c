@@ -52,6 +52,24 @@
 #define _GNU_SOURCE
 #endif
 
+/*
+ * Large-file support, for 32-bit agents. Without it off_t is 32 bits and
+ * ftruncate() (used to trim a partial record after a short write) fails past
+ * 2 GB, while statvfs() can return EOVERFLOW on a large filesystem and take
+ * the free-space floor with it. This affects only our own calls — no off_t
+ * crosses into the host program — so it cannot create an ABI mismatch with
+ * the code this file is linked into.
+ *
+ * _TIME_BITS=64 is deliberately NOT set for exactly that reason: it would
+ * change struct timespec's layout in this translation unit only, and this
+ * file is linked into someone else's program. Nothing here stores a time_t
+ * on disk, so 32-bit time is a 2038 problem for the host libc to solve, not
+ * a correctness problem for the trace format.
+ */
+#ifndef _FILE_OFFSET_BITS
+#define _FILE_OFFSET_BITS 64
+#endif
+
 #include "trace.h"
 #include "trace_shm.h"
 
@@ -231,6 +249,37 @@ NOINSTR static uint64_t trace_ticks_hz_hint(void) {
     __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(v));
     return v;
 }
+#elif defined(__arm__) && defined(__ARM_ARCH) && __ARM_ARCH >= 7
+/*
+ * 32-bit ARM: the same generic timer as aarch64, reached through CP15
+ * instead of a system register. CNTVCT is a 64-bit value delivered in a
+ * register pair, so it needs mrrc rather than mrc.
+ *
+ * Worth having precisely because these are the smallest devices callsight
+ * targets: without it every event on a 32-bit board pays a clock_gettime,
+ * and on older ARM kernels CLOCK_MONOTONIC_RAW is not even in the vDSO, so
+ * that is a full syscall per event.
+ *
+ * The generic timer is optional on ARMv7 and the registers trap to
+ * undefined-instruction where it is absent, so this is gated on a nonzero
+ * CNTFRQ at startup (trace_ticks_usable) and falls back to the clock.
+ */
+#define TRACE_HAVE_TICKS 1
+NOINSTR static inline uint64_t trace_ticks(void) {
+    uint32_t lo, hi;
+    __asm__ __volatile__("mrrc p15, 1, %0, %1, c14" : "=r"(lo), "=r"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+NOINSTR static uint64_t trace_ticks_hz_hint(void) {
+    uint32_t hz;
+    __asm__ __volatile__("mrc p15, 0, %0, c14, c0, 0" : "=r"(hz));
+    return hz;
+}
+/* A zero frequency means the timer is not implemented (or the firmware
+ * never programmed CNTFRQ, which is indistinguishable and equally unusable). */
+NOINSTR static int trace_ticks_usable(void) {
+    return trace_ticks_hz_hint() != 0;
+}
 #else
 #define TRACE_HAVE_TICKS 0
 NOINSTR static inline uint64_t trace_ticks(void) { return 0; }
@@ -318,6 +367,24 @@ NOINSTR static int trace_write_all(int fd, const void *buf, size_t len,
     return rc;
 }
 
+/*
+ * Which way round this agent writes its integers.
+ *
+ * Recorded in every header so the analysis host does not have to infer it.
+ * The host can infer it anyway — a byte-swapped `version` is unmistakable —
+ * but a flag makes a hexdump and an error message legible, and costs one
+ * predictable branch per file, not per event.
+ */
+NOINSTR static uint32_t trace_endian_flag(void) {
+#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__)
+    return __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__ ? TRACE_HF_BIGENDIAN : 0u;
+#else
+    /* No compiler macro: ask the machine rather than assume the common case. */
+    const uint32_t one = 1u;
+    return ((const unsigned char *)&one)[0] == 0u ? TRACE_HF_BIGENDIAN : 0u;
+#endif
+}
+
 NOINSTR static void trace_fill_header(trace_file_header_t *hdr, uint32_t pid,
                                       uint32_t seq) {
     memset(hdr, 0, sizeof(*hdr));
@@ -326,7 +393,8 @@ NOINSTR static void trace_fill_header(trace_file_header_t *hdr, uint32_t pid,
     hdr->event_size = (uint32_t)sizeof(trace_event_t);
     hdr->header_size = (uint32_t)sizeof(trace_file_header_t);
     hdr->flags = (g_use_ticks ? TRACE_HF_TICKS : 0u)
-               | (atomic_load(&g_wrapped) ? TRACE_HF_WRAPPED : 0u);
+               | (atomic_load(&g_wrapped) ? TRACE_HF_WRAPPED : 0u)
+               | trace_endian_flag();
     hdr->load_bias = g_load_bias;
     hdr->tick_hz = g_use_ticks ? g_tick_hz : 0;
     hdr->t0_ticks = g_t0_ticks;
@@ -816,7 +884,7 @@ NOINSTR static void trace_sum_write(trace_tls_t *tls) {
     hdr.version = TRACE_SUM_VERSION;
     hdr.record_size = (uint32_t)sizeof(trace_sum_record_t);
     hdr.header_size = (uint32_t)sizeof(trace_sum_header_t);
-    hdr.flags = g_use_ticks ? TRACE_HF_TICKS : 0u;
+    hdr.flags = (g_use_ticks ? TRACE_HF_TICKS : 0u) | trace_endian_flag();
     hdr.load_bias = g_load_bias;
     hdr.tick_hz = g_use_ticks ? g_tick_hz : 0;
     hdr.t0_ticks = g_t0_ticks;
@@ -1097,7 +1165,8 @@ NOINSTR static void trace_global_init(void) {
         if (g_shm) {
             /* The drain client cannot know how to read our timestamps or
              * addresses; publish that with the ring so it can forward it. */
-            g_shm->flags = g_use_ticks ? TRACE_HF_TICKS : 0u;
+            g_shm->flags = (g_use_ticks ? TRACE_HF_TICKS : 0u)
+                         | trace_endian_flag();
             g_shm->load_bias = g_load_bias;
             g_shm->tick_hz = g_use_ticks ? g_tick_hz : 0;
             g_shm->t0_ticks = g_t0_ticks;

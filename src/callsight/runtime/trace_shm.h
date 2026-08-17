@@ -31,7 +31,13 @@
  *   then chunks: u32 type, u32 raw_len, u32 zstd_len, payload
  *     type 0: events  (payload decompresses to raw_len bytes of events)
  *     type 1: notice  (payload decompresses to a u64 dropped-event count)
- * All integers little-endian.
+ *
+ * Integers are in the AGENT's byte order, not a canonical one — the device
+ * is the constrained side and the server is not, so the server detects and
+ * swaps. `version` is the tell: it is a small number, so a value that does
+ * not fit in 16 bits means the sender's order is the opposite of the
+ * reader's, and TRACE_HF_BIGENDIAN in `flags` says so outright. The ring
+ * itself is never mixed: both ends of it are processes on the same device.
  */
 
 #include <errno.h>
@@ -85,6 +91,19 @@ typedef struct {
     uint64_t            hook_ns;
 } trace_shm_header_t;
 
+/*
+ * Both of these cross a process boundary (the ring) or a machine boundary
+ * (the wire), so their sizes are asserted, not assumed. See the same
+ * reasoning in trace.h.
+ */
+#if defined(__cplusplus)
+static_assert(sizeof(trace_shm_header_t) == 96,
+              "trace_shm_header_t must be 96 bytes");
+#else
+_Static_assert(sizeof(trace_shm_header_t) == 96,
+               "trace_shm_header_t must be 96 bytes");
+#endif
+
 /* Stream handshake, sent once per connection before any chunk. */
 typedef struct {
     char     magic[8];   /* TRACE_STREAM_MAGIC */
@@ -98,6 +117,14 @@ typedef struct {
     uint64_t t0_ns;
     uint64_t hook_ns;
 } trace_stream_header_t;
+
+#if defined(__cplusplus)
+static_assert(sizeof(trace_stream_header_t) == 64,
+              "trace_stream_header_t must be 64 bytes");
+#else
+_Static_assert(sizeof(trace_stream_header_t) == 64,
+               "trace_stream_header_t must be 64 bytes");
+#endif
 
 /* Total mapping size for a ring of `capacity` bytes. */
 static inline uint64_t trace_shm_total(uint32_t capacity) {

@@ -8,7 +8,8 @@
 #     instrument: CFLAGS = $(CFLAGS_INSTRUMENT)
 #     instrument: $(BINDIR)/$(TARGET).instr
 #     $(BINDIR)/$(TARGET).instr: $(OBJS) $(TRACE_OBJ) | $(BINDIR)
-#         $(CC) $(CFLAGS_INSTRUMENT) -o $@ $(OBJS) $(TRACE_OBJ) $(LDFLAGS)
+#         $(CC) $(CFLAGS_INSTRUMENT) -o $@ $(OBJS) $(TRACE_OBJ) \
+#             $(LDFLAGS) $(CALLSIGHT_LDLIBS)
 #
 # Expected from the including Makefile:
 #   SRCS            source file list (as passed to the compiler)
@@ -49,6 +50,25 @@ above; re-run '$(CALLSIGHT) flags --config $(CALLSIGHT_CONFIG) -- $$(SRCS)' \
 for the full diagnostic)
 endif
 endif
+
+# 64-bit atomics on a 32-bit agent.
+#
+# The runtime charges its byte budget with a 64-bit atomic. ARMv7 and up have
+# ldrexd/strexd and inline it; ARMv5/v6, MIPS32 and PowerPC32 do not, so the
+# compiler emits libatomic calls and the link fails with undefined references
+# to __atomic_fetch_add_8 unless -latomic is on the line.
+#
+# Probed rather than guessed, and only added when it is both needed AND
+# available, so a target with neither inline atomics nor libatomic fails with
+# the real linker error instead of a confusing "cannot find -latomic".
+# Recursively expanded (=, not :=) so an ordinary non-instrumented build
+# never pays for the probe.
+CALLSIGHT_ATOMIC_PROBE = int main(void){_Atomic unsigned long long v=0; \
+return (int)__atomic_fetch_add(&v,1,__ATOMIC_SEQ_CST);}
+CALLSIGHT_LDLIBS = $(shell echo '$(CALLSIGHT_ATOMIC_PROBE)' | \
+	$(CC) -x c - -o /dev/null >/dev/null 2>&1 || \
+	{ echo '$(CALLSIGHT_ATOMIC_PROBE)' | \
+	  $(CC) -x c - -latomic -o /dev/null >/dev/null 2>&1 && echo -latomic; })
 
 TRACE_OBJ = $(BUILDDIR)/callsight_runtime/trace.o
 

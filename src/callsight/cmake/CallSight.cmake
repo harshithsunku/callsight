@@ -79,6 +79,25 @@ function(callsight_instrument target)
     set_source_files_properties("${_runtime}"
         PROPERTIES COMPILE_OPTIONS "-fno-instrument-functions")
 
+    # 64-bit atomics on a 32-bit agent: the runtime charges its byte budget
+    # with one. ARMv7 and up inline it; ARMv5/v6, MIPS32 and PowerPC32 emit
+    # libatomic calls instead and the link fails on __atomic_fetch_add_8.
+    # Probed both ways so a target with neither inline atomics nor libatomic
+    # gets the real linker error, not "cannot find -latomic".
+    include(CheckCSourceCompiles)
+    set(_atomic_probe "int main(void){_Atomic unsigned long long v=0;
+        return (int)__atomic_fetch_add(&v,1,__ATOMIC_SEQ_CST);}")
+    check_c_source_compiles("${_atomic_probe}" CALLSIGHT_ATOMIC_INLINE)
+    if(NOT CALLSIGHT_ATOMIC_INLINE)
+        set(CMAKE_REQUIRED_LIBRARIES atomic)
+        check_c_source_compiles("${_atomic_probe}" CALLSIGHT_ATOMIC_LIB)
+        unset(CMAKE_REQUIRED_LIBRARIES)
+        if(CALLSIGHT_ATOMIC_LIB)
+            target_link_libraries(${target} PRIVATE atomic)
+            message(STATUS "callsight: linking -latomic for 64-bit atomics")
+        endif()
+    endif()
+
     if(CALLSIGHT_NO_PIE)
         target_link_options(${target} PRIVATE -no-pie)
     endif()

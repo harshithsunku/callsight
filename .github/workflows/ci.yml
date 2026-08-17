@@ -78,6 +78,79 @@ jobs:
           TRACE_ENABLE=1 TRACE_DIR=/tmp/tsan-traces TRACE_MODE=summary \
             /tmp/probe threads 4 3000
 
+  cross-portability:
+    # A trace is written by the agent and read by an x86 host, so the two
+    # ends can disagree about word size and byte order. Read the wrong way
+    # round, a trace does not fail loudly — it yields addresses that resolve
+    # to nothing and timestamps in the wrong millennium — so the agent is
+    # built for each combination, run under qemu, and its output analyzed
+    # here, on x86, which is the real deployment shape.
+    #
+    # The probe's call graph is fixed (probe_top once, probe_mid N, probe_leaf
+    # 8N), so "it parsed" is not the bar: the counts must be exactly equal to
+    # what the same source produces natively.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: 32-bit little-endian (ARMv7)
+            triple: arm-linux-gnueabihf
+            pkg: gcc-arm-linux-gnueabihf
+            qemu: qemu-arm-static
+            endian: le
+          - name: 32-bit big-endian (PowerPC)
+            triple: powerpc-linux-gnu
+            pkg: gcc-powerpc-linux-gnu
+            qemu: qemu-ppc-static
+            endian: be
+          - name: 64-bit big-endian (s390x)
+            triple: s390x-linux-gnu
+            pkg: gcc-s390x-linux-gnu
+            qemu: qemu-s390x-static
+            endian: be
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: install the cross toolchain and qemu
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.pkg }} qemu-user-static
+      - name: build the agent for ${{ matrix.name }}
+        run: |
+          CC=${{ matrix.triple }}-gcc
+          # -Werror matters here: the struct-size assertions in trace.h are
+          # what catch an ABI whose padding rules differ from ours.
+          $CC -std=c11 -O2 -Wall -Wextra -pedantic -Werror -static \
+            -I src/callsight/runtime -finstrument-functions \
+            -c -o /tmp/probe.o tests/runtime/runtime_probe.c
+          $CC -std=c11 -O2 -Wall -Wextra -pedantic -Werror -static \
+            -I src/callsight/runtime -c -o /tmp/rt.o \
+            src/callsight/runtime/trace.c
+          # 64-bit atomics are a libcall on 32-bit targets without ldrexd;
+          # same probe the Makefile fragment does, in the same order.
+          $CC -static -o /tmp/probe /tmp/probe.o /tmp/rt.o -lpthread \
+            || $CC -static -o /tmp/probe /tmp/probe.o /tmp/rt.o -lpthread -latomic
+          file /tmp/probe
+      - name: trace under qemu, analyze on x86
+        run: |
+          mkdir -p /tmp/cross-traces
+          TRACE_ENABLE=1 TRACE_DIR=/tmp/cross-traces \
+            ${{ matrix.qemu }} /tmp/probe spin 500
+          uv run python .github/scripts/check_agent_trace.py \
+            /tmp/cross-traces /tmp/probe 500 \
+            --addr2line ${{ matrix.triple }}-addr2line \
+            --expect-endian ${{ matrix.endian }}
+      - name: summary mode crosses the same way
+        run: |
+          rm -rf /tmp/cross-summary && mkdir -p /tmp/cross-summary
+          TRACE_ENABLE=1 TRACE_MODE=summary TRACE_DIR=/tmp/cross-summary \
+            ${{ matrix.qemu }} /tmp/probe spin 500
+          uv run callsight analyze /tmp/cross-summary --exe /tmp/probe \
+            --addr2line ${{ matrix.triple }}-addr2line | tee summary.out
+          grep -q "mode=summary" summary.out
+          grep -q "probe_leaf" summary.out
+
   smoke-make:
     runs-on: ubuntu-latest
     steps:

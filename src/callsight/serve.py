@@ -34,10 +34,35 @@ VERSION = 2
 CHUNK_EVENTS = 0
 CHUNK_NOTICE = 1
 
-# magic, version, event_size, flags, pad, load_bias, tick_hz, t0_ticks,
-# t0_ns, hook_ns
-_STREAM_HEADER = struct.Struct("<8sIIIIQQQQQ")
-_CHUNK_HEADER = struct.Struct("<III")
+class _Wire:
+    """The stream protocol's structs in one byte order.
+
+    A device sends its native order (see trace_shm.h) and this side adapts,
+    because the device is the constrained end of the link and this one is
+    not. Everything a connection needs to both read the wire and write the
+    files travels together, so the two can never disagree — which is exactly
+    the bug that would otherwise appear here: a little-endian file header in
+    front of relayed big-endian event bytes is a file no reader can be right
+    about.
+    """
+
+    __slots__ = ("endian", "stream_header", "chunk_header", "u64", "layout")
+
+    def __init__(self, endian, layout):
+        self.endian = endian
+        # magic, version, event_size, flags, pad, load_bias, tick_hz,
+        # t0_ticks, t0_ns, hook_ns
+        self.stream_header = struct.Struct(endian + "8sIIIIQQQQQ")
+        self.chunk_header = struct.Struct(endian + "III")
+        self.u64 = struct.Struct(endian + "Q")
+        self.layout = layout       # matching on-disk structs
+
+
+_WIRE_LE = _Wire("<", analyze.LE)
+_WIRE_BE = _Wire(">", analyze.BE)
+
+_STREAM_HEADER = _WIRE_LE.stream_header
+_CHUNK_HEADER = _WIRE_LE.chunk_header
 
 
 def _recv_all(conn, n):
@@ -57,12 +82,16 @@ class _SegmentWriter:
     file, and the connection's total is capped so it cannot fill the disk.
     """
 
-    def __init__(self, outdir, stem, meta, seg_bytes, max_bytes):
+    def __init__(self, outdir, stem, meta, seg_bytes, max_bytes,
+                 wire=_WIRE_LE):
         self.outdir = outdir
         self.stem = stem
         self.meta = meta
         self.seg_bytes = seg_bytes
         self.max_bytes = max_bytes
+        # The event bytes are relayed untouched, so the header in front of
+        # them has to be written in the device's byte order too.
+        self.wire = wire
         self.total = 0
         self.written = 0
         self.seq = 0
@@ -71,18 +100,20 @@ class _SegmentWriter:
         self._open()
 
     def _header(self):
-        return analyze.HEADER.pack(
+        hdr = self.wire.layout.header
+        return hdr.pack(
             analyze.MAGIC, analyze.VERSION, analyze.EVENT.size,
-            analyze.HEADER.size, self.meta["flags"], self.meta["load_bias"],
+            hdr.size, self.meta["flags"], self.meta["load_bias"],
             self.meta["tick_hz"], self.meta["t0_ticks"], self.meta["t0_ns"],
             self.meta["hook_ns"], self.meta["pid"], self.seq, 0)
 
     def _open(self):
         path = self.outdir / f"{self.stem}.{self.seq}.bin"
         self.f = open(path, "wb")
-        self.f.write(self._header())
-        self.written = analyze.HEADER.size
-        self.total += analyze.HEADER.size
+        head = self._header()
+        self.f.write(head)
+        self.written = len(head)
+        self.total += len(head)
 
     def write(self, raw):
         if self.stopped:
@@ -103,7 +134,8 @@ class _SegmentWriter:
         """Record why collection ended, in-band, the way the runtime does."""
         if self.stopped or self.f is None:
             return
-        self.f.write(analyze.EVENT.pack(0, code, payload, 0, analyze.MARKER))
+        self.f.write(self.wire.layout.event.pack(0, code, payload, 0,
+                                                 analyze.MARKER))
         self.stopped = True
 
     def close(self):
@@ -117,8 +149,13 @@ def _handle(conn, addr, outdir, dctx, conn_id, seg_bytes, max_bytes):
     header = _recv_all(conn, _STREAM_HEADER.size)
     if header is None:
         return
+    # Which way round this device writes its integers. The magic is a byte
+    # string and reads the same either way; the small u32 version behind it
+    # is the tell. Everything for this connection — wire structs and the
+    # file headers written for it — comes from the answer.
+    wire = _WIRE_BE if analyze.byte_order(header) == ">" else _WIRE_LE
     (magic, version, event_size, flags, _pad, load_bias, tick_hz, t0_ticks,
-     t0_ns, hook_ns) = _STREAM_HEADER.unpack(header)
+     t0_ns, hook_ns) = wire.stream_header.unpack(header)
     if magic != MAGIC or version != VERSION:
         print(f"serve: {addr}: bad stream header (magic/version), dropped",
               file=sys.stderr)
@@ -132,14 +169,17 @@ def _handle(conn, addr, outdir, dctx, conn_id, seg_bytes, max_bytes):
             "t0_ticks": t0_ticks, "t0_ns": t0_ns, "hook_ns": hook_ns,
             "pid": conn_id}
     writer = _SegmentWriter(outdir, f"trace.stream.{conn_id}", meta,
-                            seg_bytes, max_bytes)
+                            seg_bytes, max_bytes, wire)
+    if wire is _WIRE_BE:
+        print(f"serve: {addr}: big-endian device; relaying its byte order "
+              f"into the trace files (callsight analyze reads both)")
     events = 0
     try:
         while True:
-            hdr = _recv_all(conn, _CHUNK_HEADER.size)
+            hdr = _recv_all(conn, wire.chunk_header.size)
             if hdr is None:
                 break
-            ctype, raw_len, zstd_len = _CHUNK_HEADER.unpack(hdr)
+            ctype, raw_len, zstd_len = wire.chunk_header.unpack(hdr)
             payload = _recv_all(conn, zstd_len)
             if payload is None:
                 break
@@ -156,7 +196,7 @@ def _handle(conn, addr, outdir, dctx, conn_id, seg_bytes, max_bytes):
                           f"discarding the rest of this stream",
                           file=sys.stderr)
             elif ctype == CHUNK_NOTICE:
-                dropped = struct.unpack("<Q", raw[:8])[0]
+                dropped = wire.u64.unpack(raw[:8])[0]
                 print(f"serve: {addr}: device dropped {dropped} events "
                       f"(ring full — client too slow or ring too small)")
     finally:

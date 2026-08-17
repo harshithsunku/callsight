@@ -289,7 +289,8 @@ callsight_instrument(&lt;target&gt;)</code></pre>
 <h3 id="fmt-trace">Trace files</h3>
 <p><code>trace.&lt;pid&gt;.&lt;tid&gt;.&lt;seq&gt;.bin</code> (file mode) or
 <code>trace.stream.&lt;id&gt;.&lt;seq&gt;.bin</code> (streamed). An 80-byte version 2
-header followed by fixed 32-byte little-endian event records. The
+header followed by fixed 32-byte event records in the
+<a href="#portability">agent's byte order</a>. The
 <a href="architecture.html#event">architecture page</a> documents the record; a file with a
 bad magic, unknown version or mismatched event size is skipped with a warning, and a
 truncated final record is tolerated.</p>
@@ -299,7 +300,7 @@ truncated final record is tolerated.</p>
   <tbody>
     <tr><td class="nowrap"><code>magic, version, event_size</code></td><td>The first 16 bytes are laid out exactly as version 1, so any reader can identify the file before it knows the rest</td></tr>
     <tr><td class="nowrap"><code>header_size</code></td><td>Bytes to the first event. Readers skip to it rather than assuming a size, which is what lets a later version add fields without breaking this one</td></tr>
-    <tr><td class="nowrap"><code>flags</code></td><td>Bit 0: timestamps are raw ticks, not nanoseconds. Bit 1: this capture rotated</td></tr>
+    <tr><td class="nowrap"><code>flags</code></td><td>Bit 0: timestamps are raw ticks, not nanoseconds. Bit 1: this capture rotated. Bit 2: written by a big-endian agent</td></tr>
     <tr><td class="nowrap"><code>load_bias</code></td><td>The PIE relocation offset; <code>analyze</code> subtracts it to get link addresses. Zero for a <code>-no-pie</code> link</td></tr>
     <tr><td class="nowrap"><code>tick_hz, t0_ticks, t0_ns</code></td><td>Clock calibration. A closing anchor written at exit lets the rate be derived across the whole run</td></tr>
     <tr><td class="nowrap"><code>hook_ns</code></td><td>The runtime's own measured per-hook cost, for <code>--subtract-overhead</code></td></tr>
@@ -328,6 +329,44 @@ nanoseconds</strong>. Read directly by flamegraph.pl and speedscope.</p>
 <code>rows</code> array sorted by self time, a <code>per_thread</code> array, plus
 <code>tool</code> and <code>version</code>. See the
 <a href="analysis.html#json">analysis page</a> for a full example.</p>
+
+<h2 id="portability">Agent portability</h2>
+<p>The agent runs where your code runs; the analysis host is usually an x86-64
+workstation. Those two can disagree about word size and byte order, so the format
+is self-describing rather than fixed: <strong>the agent writes its native byte
+order</strong> and <code>analyze</code> detects and swaps. The device is the
+constrained side of the system and the host is not, so the host does the work.</p>
+<p>Detection needs no extra field. Every header opens with a byte-string magic,
+which reads the same either way, followed by a small <code>u32 version</code> — so a
+version that does not fit in 16 bits is a byte-swapped one and nothing else.
+<code>TRACE_HF_BIGENDIAN</code> records it explicitly as well, which costs nothing
+and makes a hexdump legible. <code>callsight serve</code> relays event bytes
+untouched and writes its file headers in <em>the device's</em> order, so a
+streamed segment is never half one thing and half the other.</p>
+<div class="table-scroll">
+<table class="ref">
+  <thead><tr><th>Tested combination</th><th>How</th></tr></thead>
+  <tbody>
+    <tr><td class="nowrap">32-bit little-endian (ARMv7)</td><td rowspan="3">Cross-built in CI, run under <code>qemu-user</code>, and the resulting trace analyzed on x86 — the real deployment shape. The probe's call graph is fixed, so the check is that the counts are <em>exactly</em> what the same source produces natively, not merely that the file parsed.</td></tr>
+    <tr><td class="nowrap">32-bit big-endian (PowerPC)</td></tr>
+    <tr><td class="nowrap">64-bit big-endian (s390x)</td></tr>
+    <tr><td class="nowrap">64-bit little-endian (x86-64, aarch64)</td><td>The native test suites.</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Big-endian <em>ARM</em> has no cross toolchain in Debian, so it is not a CI leg.
+Both axes are covered independently — 32-bit ARM by the ARMv7 build, big-endian by
+PowerPC and s390x — and the runtime contains no architecture-specific endian
+assumption.</p>
+<p>Two build details matter on 32-bit agents, and both build fragments handle them
+for you. The runtime is compiled with <code>_FILE_OFFSET_BITS=64</code>, without
+which <code>ftruncate</code> fails past 2&nbsp;GB and <code>statvfs</code> can return
+<code>EOVERFLOW</code>. And the byte budget uses a 64-bit atomic: ARMv7 and up
+inline it, while ARMv5/v6, MIPS32 and PowerPC32 need <code>-latomic</code>, which
+the Make and CMake integrations probe for rather than guess.</p>
+<p>Every on-disk and on-wire struct carries a compile-time size assertion, so an ABI
+whose padding rules differ from ours fails the build instead of quietly producing
+files the analyzer misreads.</p>
 
 <h2 id="limitations">Known limitations</h2>
 <ul>

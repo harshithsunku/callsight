@@ -226,6 +226,12 @@ because the ring's whole contract is that profiling never stalls the workload.</
 load bias the ring carries — followed by a sequence of chunks. Each chunk is
 <code>u32 type, u32 raw_len, u32 zstd_len</code> followed by <code>zstd_len</code> bytes of
 ZSTD-compressed payload.</p>
+<p>Integers travel in <strong>the device's</strong> byte order, not a canonical one:
+the device is the constrained end of this link and the server is not. The server
+detects the order from the handshake's <code>version</code> field and writes the
+segment headers to match the event bytes it relays — see
+<a href="reference.html#portability">agent portability</a>. A 32-bit or big-endian
+device therefore needs nothing special beyond a cross compiler.</p>
 <div class="table-scroll">
 <table class="ref">
   <thead><tr><th>Type</th><th>Payload</th><th>Server action</th></tr></thead>

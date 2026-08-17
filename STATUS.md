@@ -23,6 +23,7 @@ starts.
 | PIE support (no `-no-pie` requirement) | ✅ done | cmake_demo builds a PIE by default and resolves every symbol in CI |
 | Fast clock (invariant TSC / `cntvct_el0`) | ✅ done | 12.0 ns/hook vs 16.2 for `clock_gettime`, measured by `tests/bench/run_bench.py` |
 | Runtime correctness (tid reuse, fork, write errors, races) | ✅ done | 20 end-to-end runtime tests + a ThreadSanitizer leg over the threaded paths |
+| Portable agents (32-bit, big-endian) | ✅ done | agent writes its native byte order and the host detects it; ARMv7 / PowerPC32 / s390x cross-built in CI, run under qemu, analyzed on x86 — exact call counts, not just "it parsed" |
 | Export formats (`folded`, `json`, `chrome`, `callers`) | ✅ done | folded total matches the text report exactly; chrome opens in ui.perfetto.dev |
 | Regression gate (`callsight diff --fail-over`) | ✅ done | exact call counts make the comparison real; exits non-zero over budget |
 | Ergonomics (`callsight run`, `callsight doctor`) | ✅ done | one command from binary to report; doctor checks toolchain, config, disk |

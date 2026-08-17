@@ -151,6 +151,17 @@ hotspots (cmake_demo must show only `fib` — `mix` is excluded).
 - The wire protocol and ring layout live only in
   `src/callsight/runtime/trace_shm.h`; bump `TRACE_SHM_VERSION` /
   `TRACE_STREAM_VERSION` on any layout change.
+- **Byte order: the agent writes native, the host adapts.** Never byte-swap
+  in the runtime — the device is the constrained side. Every reader picks a
+  layout once per file/connection from `analyze.LE` / `analyze.BE` (detected
+  by `analyze.byte_order`, which reads the version field), never a
+  hard-coded `<`. `callsight serve` relays event bytes untouched, so the
+  headers it writes must use the *device's* order or the file is
+  half one thing and half the other.
+- Every struct that reaches a file or a socket carries a compile-time size
+  assertion (`TRACE_ASSERT_SIZE` in trace.h). New fields keep the 64-bit
+  members 8-byte aligned so 32-bit and 64-bit ABIs agree, and the assertion
+  is what proves it.
 - The instrumentation runtime (`src/callsight/runtime/trace.c`) must never
   be compiled with `-finstrument-functions`; every function there carries
   `__attribute__((no_instrument_function))`, and both build integrations

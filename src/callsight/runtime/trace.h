@@ -51,9 +51,34 @@
  * <dir>/trace.summary.<pid>.<tid>.bin in summary mode, both read by
  * `callsight analyze`. In streaming mode the server side writes equivalent
  * trace.stream.*.bin files.
+ *
+ * Byte order: the agent writes its NATIVE order and the reader detects it.
+ * The device is the constrained side of this system and the analysis host is
+ * not, so the host does the swapping. Detection needs no extra field: every
+ * header opens with a byte-string magic (order-neutral) followed by a small
+ * u32 version, so a version that does not fit in 16 bits means the producer's
+ * order is the opposite of the reader's. TRACE_HF_BIGENDIAN records it
+ * explicitly as well, which costs nothing and makes a hexdump readable.
  */
 
 #include <stdint.h>
+
+/*
+ * On-disk layout is an ABI. These structs are written to files and sockets
+ * and read by a host that may be a different architecture entirely, so their
+ * sizes are asserted rather than assumed: a target whose padding rules differ
+ * must fail here, at compile time, not silently produce files the analyzer
+ * misreads. (All of them are padding-clean on both 32- and 64-bit ABIs by
+ * construction — every 64-bit field lands on an 8-byte boundary — and these
+ * assertions are what keeps that true as fields are added.)
+ */
+#if defined(__cplusplus)
+#define TRACE_ASSERT_SIZE(type, bytes) \
+    static_assert(sizeof(type) == (bytes), #type " must be " #bytes " bytes")
+#else
+#define TRACE_ASSERT_SIZE(type, bytes) \
+    _Static_assert(sizeof(type) == (bytes), #type " must be " #bytes " bytes")
+#endif
 
 #define TRACE_FILE_MAGIC   "MLTRACE\0"
 #define TRACE_FILE_VERSION 2u
@@ -85,11 +110,13 @@ typedef struct {
     uint32_t seq;         /* segment number within this thread's capture */
     uint64_t _reserved;
 } trace_file_header_t;    /* 80 bytes */
+TRACE_ASSERT_SIZE(trace_file_header_t, 80);
 
-#define TRACE_HF_TICKS   0x1u  /* ts fields are raw ticks, not nanoseconds */
-#define TRACE_HF_WRAPPED 0x2u  /* capture rotated: earlier segments discarded */
+#define TRACE_HF_TICKS     0x1u  /* ts fields are raw ticks, not nanoseconds */
+#define TRACE_HF_WRAPPED   0x2u  /* capture rotated: earlier segments discarded */
+#define TRACE_HF_BIGENDIAN 0x4u  /* written by a big-endian agent */
 
-/* On-disk event record (32 bytes, fixed layout, little-endian) */
+/* On-disk event record (32 bytes, fixed layout, agent byte order) */
 typedef struct {
     uint64_t ts_ns;       /* timestamp: ns, or ticks when TRACE_HF_TICKS */
     uint64_t func_addr;   /* address of the entered/exited function */
@@ -98,6 +125,7 @@ typedef struct {
     uint8_t  kind;        /* TRACE_EVENT_* */
     uint8_t  _pad[3];
 } trace_event_t;
+TRACE_ASSERT_SIZE(trace_event_t, 32);
 
 #define TRACE_EVENT_ENTER  0u
 #define TRACE_EVENT_EXIT   1u
@@ -146,6 +174,7 @@ typedef struct {
     uint64_t span;        /* last minus first timestamp seen on this thread */
     uint64_t truncated;   /* calls dropped past the shadow-stack depth limit */
 } trace_sum_header_t;
+TRACE_ASSERT_SIZE(trace_sum_header_t, 96);
 
 typedef struct {
     uint64_t func_addr;
@@ -156,6 +185,7 @@ typedef struct {
     uint64_t max;
     uint32_t hist[TRACE_HIST_BUCKETS];
 } trace_sum_record_t;
+TRACE_ASSERT_SIZE(trace_sum_record_t, 688);
 
 /* Compiler-inserted hooks (called for every instrumented function) */
 void __cyg_profile_func_enter(void *this_fn, void *call_site)

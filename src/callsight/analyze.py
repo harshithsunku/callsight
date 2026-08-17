@@ -37,15 +37,69 @@ from pathlib import Path
 MAGIC = b"MLTRACE\0"
 SUM_MAGIC = b"MLSUMRY\0"
 
-# Version 1 header, and the prefix of every later one: readers can always
-# learn the version before they know the rest of the layout.
-HEADER_V1 = struct.Struct("<8sII")
-# Version 2: adds header_size (so v3 will not break this reader), the PIE
-# load bias, clock anchors and the measured hook cost.
-HEADER = struct.Struct("<8sIIIIQQQQQIIQ")
-EVENT = struct.Struct("<QQQIB3x")
-SUM_HEADER = struct.Struct("<8sIIIIQQQQQIIQQQ")
-SUM_RECORD = struct.Struct("<6Q160I")
+class _Layout:
+    """Every on-disk struct, in one byte order.
+
+    The agent writes its NATIVE byte order and the host swaps if it has to:
+    the device is the constrained side of this system and the analysis host
+    is not (see the byte-order note in runtime/trace.h). Sizes are identical
+    either way, so only the unpacking differs — and the choice is made once
+    per file, never per record, so a foreign-endian trace costs nothing to
+    read beyond what Python's own struct module does anyway.
+    """
+
+    __slots__ = ("endian", "header_v1", "header", "event", "sum_header",
+                 "sum_record")
+
+    def __init__(self, endian):
+        self.endian = endian
+        # Version 1 header, and the prefix of every later one: readers can
+        # always learn the version before they know the rest of the layout.
+        self.header_v1 = struct.Struct(endian + "8sII")
+        # Version 2: adds header_size (so v3 will not break this reader),
+        # the PIE load bias, clock anchors and the measured hook cost.
+        self.header = struct.Struct(endian + "8sIIIIQQQQQIIQ")
+        self.event = struct.Struct(endian + "QQQIB3x")
+        self.sum_header = struct.Struct(endian + "8sIIIIQQQQQIIQQQ")
+        self.sum_record = struct.Struct(endian + "6Q160I")
+
+
+LE = _Layout("<")
+BE = _Layout(">")
+
+# The little-endian names, which are what the format documentation and the
+# overwhelming majority of agents use.
+HEADER_V1 = LE.header_v1
+HEADER = LE.header
+EVENT = LE.event
+SUM_HEADER = LE.sum_header
+SUM_RECORD = LE.sum_record
+
+# magic[8] + u32 version — the prefix every callsight header shares, and all
+# that is needed to tell which way round the rest of it is.
+_PEEK = struct.Struct("<8sI")
+
+
+def _layout_for(head):
+    """Pick the byte order a header was written in.
+
+    The magic is a byte string and reads the same either way, but the u32
+    `version` right after it is a small number — so a value that does not fit
+    in 16 bits is a byte-swapped one, and nothing else. TRACE_HF_BIGENDIAN in
+    `flags` says the same thing outright, but it cannot be read until the
+    order is known, which is why this is what decides.
+    """
+    if len(head) < _PEEK.size:
+        return LE
+    return BE if _PEEK.unpack_from(head)[1] > 0xFFFF else LE
+
+
+def byte_order(head):
+    """'<' or '>' — the byte order the given callsight header was written in.
+
+    For readers outside this module (the stream server) that need the same
+    answer for their own structs."""
+    return _layout_for(head).endian
 
 VERSION = 2  # TRACE_FILE_VERSION in runtime/trace.h
 
@@ -53,6 +107,7 @@ ENTER, EXIT, MARKER = 0, 1, 2
 
 HF_TICKS = 0x1
 HF_WRAPPED = 0x2
+HF_BIGENDIAN = 0x4
 
 # Marker codes; see TRACE_MARK_* in runtime/trace.h.
 MARK_BUDGET, MARK_NOSPACE, MARK_WRITE_ERR = 1, 2, 3
@@ -85,7 +140,8 @@ def read_header(path):
         print(f"warning: {path}: bad or missing header, skipped",
               file=sys.stderr)
         return None
-    _magic, version, event_size = HEADER_V1.unpack(head[:HEADER_V1.size])
+    lay = _layout_for(head)
+    _magic, version, event_size = lay.header_v1.unpack(head[:lay.header_v1.size])
     if event_size != EVENT.size:
         print(f"warning: {path}: event size {event_size} != {EVENT.size}, "
               f"skipped", file=sys.stderr)
@@ -93,7 +149,8 @@ def read_header(path):
 
     meta = {"path": path, "version": version, "flags": 0, "load_bias": 0,
             "tick_hz": 0, "t0_ticks": 0, "t0_ns": 0, "hook_ns": 0,
-            "pid": 0, "seq": 0, "header_size": HEADER_V1.size}
+            "pid": 0, "seq": 0, "header_size": lay.header_v1.size,
+            "layout": lay, "big_endian": lay is BE}
     if version == 1:
         return meta
     if version != VERSION:
@@ -101,12 +158,12 @@ def read_header(path):
               f"than this callsight understands (expected {VERSION}), "
               f"skipped", file=sys.stderr)
         return None
-    if len(head) < HEADER.size:
+    if len(head) < lay.header.size:
         print(f"warning: {path}: truncated v2 header, skipped",
               file=sys.stderr)
         return None
     (_m, _v, _e, header_size, flags, load_bias, tick_hz, t0_ticks, t0_ns,
-     hook_ns, pid, seq, _res) = HEADER.unpack(head)
+     hook_ns, pid, seq, _res) = lay.header.unpack(head)
     meta.update(header_size=header_size, flags=flags, load_bias=load_bias,
                 tick_hz=tick_hz, t0_ticks=t0_ticks, t0_ns=t0_ns,
                 hook_ns=hook_ns, pid=pid, seq=seq)
@@ -118,15 +175,16 @@ def _closing_anchor(path, meta):
     Pairing it with the startup anchor measures the tick rate across the
     whole run, which beats any startup calibration window — and costs a
     single seek to find."""
+    event = meta.get("layout", LE).event
     body = os.path.getsize(path) - meta["header_size"]
-    if body < EVENT.size:
+    if body < event.size:
         return None
     with open(path, "rb") as f:
-        f.seek(meta["header_size"] + (body // EVENT.size - 1) * EVENT.size)
-        rec = f.read(EVENT.size)
-    if len(rec) < EVENT.size:
+        f.seek(meta["header_size"] + (body // event.size - 1) * event.size)
+        rec = f.read(event.size)
+    if len(rec) < event.size:
         return None
-    ts, code, payload, _tid, kind = EVENT.unpack(rec)
+    ts, code, payload, _tid, kind = event.unpack(rec)
     if kind == MARKER and code == MARK_CLOCK:
         return ts, payload
     return None
@@ -180,10 +238,11 @@ def read_events(path, meta=None, notices=None):
     scale = _ns_per_tick(meta)
     bias = meta["load_bias"]
     t0_ticks, t0_ns = meta["t0_ticks"], meta["t0_ns"]
+    event = meta.get("layout", LE).event
 
     with open(path, "rb") as f:
         f.seek(meta["header_size"])
-        block = READ_BLOCK_EVENTS * EVENT.size
+        block = READ_BLOCK_EVENTS * event.size
         rest = b""
         while True:
             chunk = f.read(block)
@@ -191,8 +250,8 @@ def read_events(path, meta=None, notices=None):
                 break
             if rest:
                 chunk = rest + chunk
-            usable = len(chunk) - len(chunk) % EVENT.size
-            for ts, func, caller, tid, kind in EVENT.iter_unpack(chunk[:usable]):
+            usable = len(chunk) - len(chunk) % event.size
+            for ts, func, caller, tid, kind in event.iter_unpack(chunk[:usable]):
                 if kind == MARKER:
                     if func != MARK_CLOCK:
                         notices.append({"kind": MARK_NAMES.get(func, str(func)),
@@ -223,9 +282,10 @@ def read_summary(path):
             print(f"warning: {path}: bad or missing summary header, skipped",
                   file=sys.stderr)
             return None, []
+        lay = _layout_for(head)
         (_m, version, record_size, header_size, flags, load_bias, tick_hz,
          t0_ticks, t0_ns, hook_ns, pid, tid, records, span,
-         truncated) = SUM_HEADER.unpack(head)
+         truncated) = lay.sum_header.unpack(head)
         if version != 1 or record_size != SUM_RECORD.size:
             print(f"warning: {path}: unsupported summary layout "
                   f"(version {version}, record {record_size}), skipped",
@@ -235,7 +295,8 @@ def read_summary(path):
                 "load_bias": load_bias, "tick_hz": tick_hz,
                 "t0_ticks": t0_ticks, "t0_ns": t0_ns, "hook_ns": hook_ns,
                 "pid": pid, "tid": tid, "truncated": truncated,
-                "header_size": header_size}
+                "header_size": header_size,
+                "layout": lay, "big_endian": lay is BE}
         # No closing anchor in a summary file: the header rate is all there
         # is, and it is measured on the same hardware, so it is close.
         scale = 1.0 if not (flags & HF_TICKS) else (
@@ -245,10 +306,10 @@ def read_summary(path):
         f.seek(header_size)
         out = []
         for _ in range(records):
-            raw = f.read(SUM_RECORD.size)
-            if len(raw) < SUM_RECORD.size:
+            raw = f.read(lay.sum_record.size)
+            if len(raw) < lay.sum_record.size:
                 break
-            vals = SUM_RECORD.unpack(raw)
+            vals = lay.sum_record.unpack(raw)
             out.append({
                 "func": vals[0] - load_bias, "calls": vals[1],
                 "incl": int(vals[2] * scale), "self": int(vals[3] * scale),
@@ -539,6 +600,8 @@ def _describe_notices(notices, metas):
                    f"and unmatched exits below are expected")
     if any(m["flags"] & HF_WRAPPED for m in metas) and "wrap" not in counts:
         out.append("this capture rotated: earlier segments were discarded")
+    if any(m.get("big_endian") for m in metas):
+        out.append("recorded by a big-endian agent; byte-swapped on read")
     return out
 
 
@@ -683,6 +746,8 @@ def _collect_summary(files, exe, addr2line, subtract_overhead):
     if truncated:
         notices.append(f"{truncated} calls were nested deeper than the "
                        f"shadow stack and are not counted")
+    if any(m.get("big_endian") for m in metas):
+        notices.append("recorded by a big-endian agent; byte-swapped on read")
     per_thread = [{"tid": m["tid"], "events": 0, "span_ms": m["span"] / 1e6}
                   for m in sorted(metas, key=lambda m: m["tid"])]
     return {"events": calls_total * 2, "threads": len(metas),
