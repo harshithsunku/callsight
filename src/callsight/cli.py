@@ -115,7 +115,9 @@ def cmd_init(args):
 
     dest = project / "callsight"
     dest.mkdir(exist_ok=True)
-    for f in ("trace.c", "trace.h", "trace_shm.h"):
+    # Every header trace.c includes has to travel with it, or the adopted
+    # project gets a runtime that will not compile.
+    for f in ("trace.c", "trace.h", "trace_shm.h", "trace_pmu.h"):
         shutil.copy2(RUNTIME_DIR / f, dest / f)
     if args.stream:
         for f in ("trace_stream.c", "zstd.c", "zstd.h", "zstd_errors.h",

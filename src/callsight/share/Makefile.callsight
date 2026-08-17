@@ -74,6 +74,8 @@ TRACE_OBJ = $(BUILDDIR)/callsight_runtime/trace.o
 
 # Instrumentation runtime: compiled WITHOUT -finstrument-functions (via
 # CFLAGS_SYMBOLS, not CFLAGS_INSTRUMENT) so the hooks cannot recurse.
-$(TRACE_OBJ): $(CALLSIGHT_DIR)/trace.c $(CALLSIGHT_DIR)/trace.h $(CALLSIGHT_DIR)/trace_shm.h | $(BUILDDIR)
+$(TRACE_OBJ): $(CALLSIGHT_DIR)/trace.c $(CALLSIGHT_DIR)/trace.h \
+              $(CALLSIGHT_DIR)/trace_shm.h $(CALLSIGHT_DIR)/trace_pmu.h \
+              | $(BUILDDIR)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS_SYMBOLS) -c -o $@ $<
